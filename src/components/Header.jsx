@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import {
     Search,
     Grid,
@@ -9,6 +9,10 @@ import {
     ChevronDown,
     CheckSquare,
     User,
+    LogOut,
+    Settings,
+    Menu,
+    X,
 } from "lucide-react";
 
 const sortOptions = [
@@ -32,10 +36,25 @@ export default function Header({
     onToggleMultiSelect,
     selectedCount,
     viewTitle,
+    user,
+    onLogout,
+    onMobileMenuToggle,
 }) {
+    const [showUserMenu, setShowUserMenu] = useState(false);
+    const [showMobileSearch, setShowMobileSearch] = useState(false);
+
     return (
         <header className="header">
             <div className="header-left">
+                {/* Mobile menu button */}
+                <button
+                    className="mobile-menu-btn"
+                    onClick={onMobileMenuToggle}
+                    aria-label="Open menu"
+                >
+                    <Menu size={22} />
+                </button>
+
                 <h1>{viewTitle || "My Drive"}</h1>
                 {currentPath.length > 0 || !viewTitle ? (
                     <nav className="breadcrumb">
@@ -59,16 +78,37 @@ export default function Header({
                     </nav>
                 ) : null}
 
-                {/* Search - moved next to title */}
-                <div className="search-box">
+                {/* Desktop search - hidden on mobile */}
+                <div className={`search-box ${showMobileSearch ? 'mobile-visible' : ''}`}>
                     <Search size={18} />
                     <input
                         type="text"
                         placeholder="Search files..."
                         value={searchQuery}
                         onChange={(e) => onSearchChange(e.target.value)}
+                        autoFocus={showMobileSearch}
                     />
+                    {showMobileSearch && (
+                        <button
+                            className="search-close-btn"
+                            onClick={() => {
+                                setShowMobileSearch(false);
+                                onSearchChange('');
+                            }}
+                        >
+                            <X size={18} />
+                        </button>
+                    )}
                 </div>
+
+                {/* Mobile search toggle button */}
+                <button
+                    className="search-toggle-btn"
+                    onClick={() => setShowMobileSearch(true)}
+                    aria-label="Search"
+                >
+                    <Search size={18} />
+                </button>
             </div>
 
             <div className="header-right">
@@ -132,12 +172,36 @@ export default function Header({
                     />
                 </label>
 
-                {/* Profile avatar */}
-                <div className="profile-avatar" title="Profile">
-                    <User size={20} />
+                {/* Profile avatar with menu */}
+                <div className="user-menu">
+                    <div
+                        className="profile-avatar"
+                        title={user?.username || "Profile"}
+                        onClick={() => setShowUserMenu(!showUserMenu)}
+                    >
+                        <User size={20} />
+                    </div>
+
+                    {showUserMenu && (
+                        <div className="user-menu-dropdown">
+                            <div className="user-menu-item" style={{ cursor: 'default', opacity: 0.7 }}>
+                                <User size={16} />
+                                <span>{user?.username || user?.email}</span>
+                            </div>
+                            <button
+                                className="user-menu-item danger"
+                                onClick={() => {
+                                    setShowUserMenu(false);
+                                    onLogout();
+                                }}
+                            >
+                                <LogOut size={16} />
+                                <span>Sign Out</span>
+                            </button>
+                        </div>
+                    )}
                 </div>
             </div>
         </header>
     );
 }
-

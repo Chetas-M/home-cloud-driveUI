@@ -1,0 +1,10 @@
+# Home Cloud Drive - Exclude from SCP transfer
+node_modules/
+venv/
+__pycache__/
+*.pyc
+.git/
+*.db
+data/
+storage/
+.env

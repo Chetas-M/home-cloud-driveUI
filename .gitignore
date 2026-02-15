@@ -1,3 +1,10 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+backend/venv/
+backend/data/*.db
+
 # Dependencies
 node_modules/
 

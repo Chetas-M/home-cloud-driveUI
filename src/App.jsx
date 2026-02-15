@@ -14,8 +14,14 @@ import FileDetailsPanel from "./components/FileDetailsPanel";
 import TrashView from "./components/TrashView";
 import ActivityLog from "./components/ActivityLog";
 import StorageChart from "./components/StorageChart";
+import AuthPage from "./components/AuthPage";
+import api from "./api";
 
 export default function App() {
+    // Auth state
+    const [user, setUser] = useState(null);
+    const [authLoading, setAuthLoading] = useState(true);
+
     // Core state
     const [view, setView] = useState("grid");
     const [currentPath, setCurrentPath] = useState([]);
@@ -23,17 +29,19 @@ export default function App() {
     const [searchQuery, setSearchQuery] = useState("");
     const [isDragging, setIsDragging] = useState(false);
     const [uploadProgress, setUploadProgress] = useState({});
+    const [loading, setLoading] = useState(false);
 
     // View/Navigation state
     const [currentView, setCurrentView] = useState("home");
     const [theme, setTheme] = useState("dark");
     const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+    const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
 
     // Feature state
     const [sortBy, setSortBy] = useState("name");
-    const [starredIds, setStarredIds] = useState(new Set());
     const [trashedFiles, setTrashedFiles] = useState([]);
     const [activityLog, setActivityLog] = useState([]);
+    const [storageInfo, setStorageInfo] = useState(null);
 
     // Selection state
     const [isMultiSelect, setIsMultiSelect] = useState(false);
@@ -47,20 +55,68 @@ export default function App() {
     const [renameFile, setRenameFile] = useState(null);
     const [moveFile, setMoveFile] = useState(null);
 
-    /* ---------------- INITIAL DATA ---------------- */
+    /* ---------------- AUTH CHECK ---------------- */
     useEffect(() => {
-        const now = Date.now();
-        setFiles([
-            { id: "1", name: "Project.pdf", type: "pdf", size: 2400000, path: [], createdAt: now - 86400000 },
-            { id: "2", name: "photo.jpg", type: "image", size: 3100000, path: [], createdAt: now - 172800000 },
-            { id: "3", name: "Videos", type: "folder", path: [], createdAt: now - 259200000 },
-            { id: "4", name: "Docs", type: "folder", path: [], createdAt: now - 345600000 },
-            { id: "5", name: "demo.mp4", type: "video", size: 15000000, path: ["Videos"], createdAt: now - 432000000 },
-            { id: "6", name: "notes.txt", type: "text", size: 4000, path: ["Docs"], createdAt: now - 518400000 },
-            { id: "7", name: "presentation.pdf", type: "pdf", size: 5200000, path: [], createdAt: now - 3600000 },
-            { id: "8", name: "screenshot.jpg", type: "image", size: 1800000, path: [], createdAt: now - 7200000 },
-        ]);
+        const checkAuth = async () => {
+            const token = api.getToken();
+            if (token) {
+                try {
+                    const userData = await api.getMe();
+                    setUser(userData);
+                } catch (err) {
+                    api.logout();
+                }
+            }
+            setAuthLoading(false);
+        };
+        checkAuth();
     }, []);
+
+    /* ---------------- LOAD FILES ---------------- */
+    const loadFiles = useCallback(async () => {
+        if (!user) return;
+        setLoading(true);
+        try {
+            let data;
+            if (currentView === "starred") {
+                data = await api.listFiles([], { starredOnly: true });
+            } else if (currentView === "trash") {
+                data = await api.listFiles([], { includeTrash: true });
+                data = data.filter(f => f.is_trashed);
+                setTrashedFiles(data);
+                setLoading(false);
+                return;
+            } else {
+                data = await api.listFiles(currentPath);
+            }
+            setFiles(data.filter(f => !f.is_trashed));
+        } catch (err) {
+            console.error("Failed to load files:", err);
+        }
+        setLoading(false);
+    }, [user, currentPath, currentView]);
+
+    useEffect(() => {
+        loadFiles();
+    }, [loadFiles]);
+
+    /* ---------------- LOAD ACTIVITY & STORAGE ---------------- */
+    useEffect(() => {
+        const loadExtra = async () => {
+            if (!user) return;
+            try {
+                const [activities, storage] = await Promise.all([
+                    api.getActivityLog(50),
+                    api.getStorageInfo(),
+                ]);
+                setActivityLog(activities);
+                setStorageInfo(storage);
+            } catch (err) {
+                console.error("Failed to load extra data:", err);
+            }
+        };
+        loadExtra();
+    }, [user, files]);
 
     /* ---------------- THEME ---------------- */
     useEffect(() => {
@@ -99,161 +155,145 @@ export default function App() {
         return () => window.removeEventListener("keydown", handleKeyDown);
     }, [selectedIds, currentView]);
 
-    /* ---------------- ACTIVITY LOG HELPER ---------------- */
-    const logActivity = (action, fileName) => {
-        setActivityLog((prev) => [
-            { action, fileName, timestamp: Date.now() },
-            ...prev.slice(0, 49),
-        ]);
-    };
-
     /* ---------------- UPLOAD ---------------- */
-    const handleUpload = (fileList) => {
-        Array.from(fileList).forEach((file, i) => {
-            const id = Date.now() + i;
-            let progress = 0;
+    const handleUpload = async (fileList) => {
+        const filesArray = Array.from(fileList);
 
+        // Show progress
+        filesArray.forEach((file, i) => {
             setUploadProgress((p) => ({
                 ...p,
-                [id]: { name: file.name, progress: 0 },
+                [i]: { name: file.name, progress: 0 },
             }));
-
-            const interval = setInterval(() => {
-                progress += 10;
-                setUploadProgress((p) => ({
-                    ...p,
-                    [id]: { name: file.name, progress },
-                }));
-
-                if (progress >= 100) {
-                    clearInterval(interval);
-                    setUploadProgress((p) => {
-                        const copy = { ...p };
-                        delete copy[id];
-                        return copy;
-                    });
-
-                    const newFile = {
-                        id: id.toString(),
-                        name: file.name,
-                        type: file.type.startsWith("image/")
-                            ? "image"
-                            : file.type.startsWith("video/")
-                                ? "video"
-                                : file.type === "application/pdf"
-                                    ? "pdf"
-                                    : "text",
-                        size: file.size,
-                        path: currentPath,
-                        blob: file,
-                        createdAt: Date.now(),
-                    };
-
-                    setFiles((f) => [newFile, ...f]);
-                    logActivity("upload", file.name);
-                }
-            }, 120);
         });
+
+        try {
+            // Simulate progress
+            const progressInterval = setInterval(() => {
+                setUploadProgress((p) => {
+                    const updated = { ...p };
+                    Object.keys(updated).forEach((key) => {
+                        if (updated[key].progress < 90) {
+                            updated[key].progress += 10;
+                        }
+                    });
+                    return updated;
+                });
+            }, 100);
+
+            await api.uploadFiles(filesArray, currentPath);
+
+            clearInterval(progressInterval);
+            setUploadProgress({});
+            loadFiles();
+        } catch (err) {
+            console.error("Upload failed:", err);
+            setUploadProgress({});
+        }
     };
 
     /* ---------------- DOWNLOAD ---------------- */
-    const downloadFile = (file) => {
-        if (!file.blob) return;
-        const url = URL.createObjectURL(file.blob);
-        const a = document.createElement("a");
-        a.href = url;
-        a.download = file.name;
-        a.click();
-        URL.revokeObjectURL(url);
-        logActivity("download", file.name);
+    const downloadFile = async (file) => {
+        try {
+            const blob = await api.downloadFile(file.id);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = file.name;
+            a.click();
+            URL.revokeObjectURL(url);
+        } catch (err) {
+            console.error("Download failed:", err);
+        }
     };
 
     /* ---------------- CREATE FOLDER ---------------- */
-    const handleCreateFolder = (name) => {
-        const newFolder = {
-            id: Date.now().toString(),
-            name,
-            type: "folder",
-            path: currentPath,
-            createdAt: Date.now(),
-        };
-        setFiles((f) => [newFolder, ...f]);
-        logActivity("create_folder", name);
+    const handleCreateFolder = async (name) => {
+        try {
+            await api.createFolder(name, currentPath);
+            loadFiles();
+        } catch (err) {
+            console.error("Create folder failed:", err);
+        }
     };
 
     /* ---------------- RENAME ---------------- */
-    const handleRename = (id, newName) => {
-        setFiles((f) =>
-            f.map((file) => (file.id === id ? { ...file, name: newName } : file))
-        );
-        const file = files.find((f) => f.id === id);
-        if (file) logActivity("rename", `${file.name} → ${newName}`);
+    const handleRename = async (id, newName) => {
+        try {
+            await api.updateFile(id, { name: newName });
+            loadFiles();
+        } catch (err) {
+            console.error("Rename failed:", err);
+        }
     };
 
     /* ---------------- STAR/UNSTAR ---------------- */
-    const handleStar = (id) => {
-        setStarredIds((prev) => {
-            const next = new Set(prev);
-            if (next.has(id)) {
-                next.delete(id);
-            } else {
-                next.add(id);
-                const file = files.find((f) => f.id === id);
-                if (file) logActivity("star", file.name);
-            }
-            return next;
-        });
+    const handleStar = async (id) => {
+        const file = files.find((f) => f.id === id);
+        if (!file) return;
+        try {
+            await api.updateFile(id, { is_starred: !file.is_starred });
+            loadFiles();
+        } catch (err) {
+            console.error("Star failed:", err);
+        }
     };
 
     /* ---------------- TRASH ---------------- */
-    const handleTrash = (id) => {
-        const file = files.find((f) => f.id === id);
-        if (file) {
-            setFiles((f) => f.filter((item) => item.id !== id));
-            setTrashedFiles((t) => [file, ...t]);
-            setStarredIds((s) => {
-                const next = new Set(s);
-                next.delete(id);
-                return next;
-            });
-            logActivity("trash", file.name);
+    const handleTrash = async (id) => {
+        try {
+            await api.trashFile(id);
             setDetailsFile(null);
+            loadFiles();
+        } catch (err) {
+            console.error("Trash failed:", err);
         }
     };
 
-    const handleRestore = (id) => {
-        const file = trashedFiles.find((f) => f.id === id);
-        if (file) {
+    const handleRestore = async (id) => {
+        try {
+            await api.restoreFile(id);
+            loadFiles();
+            // Reload trash view
+            const trashData = await api.listFiles([], { includeTrash: true });
+            setTrashedFiles(trashData.filter(f => f.is_trashed));
+        } catch (err) {
+            console.error("Restore failed:", err);
+        }
+    };
+
+    const handleDeletePermanently = async (id) => {
+        try {
+            await api.deleteFilePermanently(id);
             setTrashedFiles((t) => t.filter((item) => item.id !== id));
-            setFiles((f) => [file, ...f]);
-            logActivity("restore", file.name);
+        } catch (err) {
+            console.error("Delete failed:", err);
         }
     };
 
-    const handleDeletePermanently = (id) => {
-        setTrashedFiles((t) => t.filter((item) => item.id !== id));
-    };
-
-    const handleEmptyTrash = () => {
-        setTrashedFiles([]);
+    const handleEmptyTrash = async () => {
+        try {
+            await api.emptyTrash();
+            setTrashedFiles([]);
+        } catch (err) {
+            console.error("Empty trash failed:", err);
+        }
     };
 
     /* ---------------- MOVE ---------------- */
-    const handleMove = (id, newPath) => {
-        setFiles((f) =>
-            f.map((file) => (file.id === id ? { ...file, path: newPath } : file))
-        );
+    const handleMove = async (id, newPath) => {
+        try {
+            await api.updateFile(id, { path: newPath });
+            loadFiles();
+        } catch (err) {
+            console.error("Move failed:", err);
+        }
     };
 
     /* ---------------- COPY ---------------- */
     const handleCopy = (file) => {
-        const copy = {
-            ...file,
-            id: Date.now().toString(),
-            name: `${file.name} (copy)`,
-            createdAt: Date.now(),
-        };
-        setFiles((f) => [copy, ...f]);
+        // For now, just show a message - would need backend support for copy
+        console.log("Copy not yet implemented on backend");
     };
 
     /* ---------------- SELECTION ---------------- */
@@ -280,23 +320,18 @@ export default function App() {
 
     /* ---------------- FILTER & SORT ---------------- */
     const getFilteredFiles = () => {
-        let result = files;
+        let result = [...files];
 
-        if (currentView === "starred") {
-            result = result.filter((f) => starredIds.has(f.id));
-        } else if (currentView === "recent") {
-            result = [...result].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)).slice(0, 20);
-        } else if (currentView === "home") {
-            result = result.filter((f) => JSON.stringify(f.path) === JSON.stringify(currentPath));
-        }
-
+        // Search filter
         if (searchQuery) {
             result = result.filter((f) =>
                 f.name.toLowerCase().includes(searchQuery.toLowerCase())
             );
         }
 
-        result = [...result].sort((a, b) => {
+        // Sort
+        result = result.sort((a, b) => {
+            // Folders first
             if (a.type === "folder" && b.type !== "folder") return -1;
             if (a.type !== "folder" && b.type === "folder") return 1;
 
@@ -304,7 +339,7 @@ export default function App() {
                 case "name":
                     return a.name.localeCompare(b.name);
                 case "date":
-                    return (b.createdAt || 0) - (a.createdAt || 0);
+                    return new Date(b.created_at) - new Date(a.created_at);
                 case "size":
                     return (b.size || 0) - (a.size || 0);
                 case "type":
@@ -322,8 +357,11 @@ export default function App() {
     // Get recent files (top 4 most recent non-folder files)
     const recentFiles = [...files]
         .filter(f => f.type !== "folder")
-        .sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0))
+        .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
         .slice(0, 4);
+
+    // Get starred files
+    const starredFiles = files.filter(f => f.is_starred);
 
     /* ---------------- NAVIGATION ---------------- */
     const handleNavigate = (viewId) => {
@@ -355,7 +393,7 @@ export default function App() {
     };
 
     /* ---------------- PREVIEW NAVIGATION ---------------- */
-    const previewableFiles = filteredFiles.filter((f) => f.type !== "folder" && (f.blob || f.previewUrl));
+    const previewableFiles = filteredFiles.filter((f) => f.type !== "folder");
     const currentPreviewIndex = previewableFiles.findIndex((f) => f.id === previewFile?.id);
 
     const handlePreviewNavigate = (direction) => {
@@ -379,28 +417,76 @@ export default function App() {
     };
 
     /* ---------------- DRAG HANDLERS ---------------- */
+    const dragCounterRef = React.useRef(0);
+
+    const handleDragEnter = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current++;
+        if (e.dataTransfer.types.includes('Files')) {
+            setIsDragging(true);
+        }
+    };
+
     const handleDragOver = (e) => {
         e.preventDefault();
-        setIsDragging(true);
+        e.stopPropagation();
     };
 
     const handleDragLeave = (e) => {
         e.preventDefault();
-        setIsDragging(false);
+        e.stopPropagation();
+        dragCounterRef.current--;
+        if (dragCounterRef.current === 0) {
+            setIsDragging(false);
+        }
     };
 
     const handleDrop = (e) => {
         e.preventDefault();
+        e.stopPropagation();
+        dragCounterRef.current = 0;
         setIsDragging(false);
-        handleUpload(e.dataTransfer.files);
+        if (e.dataTransfer.files.length > 0) {
+            handleUpload(e.dataTransfer.files);
+        }
+    };
+
+    /* ---------------- LOGOUT ---------------- */
+    const handleLogout = () => {
+        api.logout();
+        setUser(null);
+        setFiles([]);
     };
 
     // Show recent section only on home view at root level
     const showRecentSection = currentView === "home" && currentPath.length === 0 && recentFiles.length > 0;
 
-    /* ---------------- RENDER ---------------- */
+    /* ---------------- AUTH LOADING ---------------- */
+    if (authLoading) {
+        return (
+            <div className="auth-container">
+                <div className="auth-card" style={{ textAlign: 'center' }}>
+                    <p>Loading...</p>
+                </div>
+            </div>
+        );
+    }
+
+    /* ---------------- AUTH PAGE ---------------- */
+    if (!user) {
+        return <AuthPage onLogin={setUser} />;
+    }
+
+    /* ---------------- MAIN APP ---------------- */
     return (
         <div className={`app-container ${sidebarCollapsed ? "sidebar-collapsed" : ""}`}>
+            {/* Mobile sidebar backdrop */}
+            <div
+                className={`sidebar-backdrop ${isMobileMenuOpen ? 'visible' : ''}`}
+                onClick={() => setIsMobileMenuOpen(false)}
+            />
+
             <Sidebar
                 currentView={currentView}
                 onNavigate={handleNavigate}
@@ -408,14 +494,18 @@ export default function App() {
                 theme={theme}
                 onToggleTheme={() => setTheme((t) => (t === "dark" ? "light" : "dark"))}
                 files={files}
+                storageInfo={storageInfo}
                 trashedCount={trashedFiles.length}
-                starredCount={starredIds.size}
+                starredCount={starredFiles.length}
                 isCollapsed={sidebarCollapsed}
                 onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
+                isMobileOpen={isMobileMenuOpen}
+                onMobileClose={() => setIsMobileMenuOpen(false)}
             />
 
             <main
                 className={`main-area ${detailsFile ? "with-details" : ""}`}
+                onDragEnter={handleDragEnter}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
@@ -438,13 +528,20 @@ export default function App() {
                         }}
                         selectedCount={selectedIds.size}
                         viewTitle={viewTitles[currentView]}
+                        user={user}
+                        onLogout={handleLogout}
+                        onMobileMenuToggle={() => setIsMobileMenuOpen(true)}
                     />
                 )}
 
                 <div className="file-area">
                     {isDragging && <DropZone />}
 
-                    {currentView === "trash" ? (
+                    {loading ? (
+                        <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
+                            Loading files...
+                        </div>
+                    ) : currentView === "trash" ? (
                         <TrashView
                             trashedFiles={trashedFiles}
                             onRestore={handleRestore}
@@ -472,7 +569,7 @@ export default function App() {
                                                     onDoubleClick={() => handleFileDoubleClick(file)}
                                                     onDownload={downloadFile}
                                                     onContextMenu={handleContextMenu}
-                                                    isStarred={starredIds.has(file.id)}
+                                                    isStarred={file.is_starred}
                                                     isSelected={selectedIds.has(file.id)}
                                                     isMultiSelect={isMultiSelect}
                                                     onSelect={handleSelect}
@@ -499,7 +596,7 @@ export default function App() {
                                                 onDoubleClick={() => handleFileDoubleClick(file)}
                                                 onDownload={downloadFile}
                                                 onContextMenu={handleContextMenu}
-                                                isStarred={starredIds.has(file.id)}
+                                                isStarred={file.is_starred}
                                                 isSelected={selectedIds.has(file.id)}
                                                 isMultiSelect={isMultiSelect}
                                                 onSelect={handleSelect}
@@ -510,9 +607,12 @@ export default function App() {
                             </div>
 
                             {/* Floating Storage Panel (when sidebar collapsed) */}
-                            {sidebarCollapsed && (
+                            {sidebarCollapsed && storageInfo && (
                                 <aside className="floating-storage">
-                                    <StorageChart files={files} />
+                                    <StorageChart
+                                        files={files}
+                                        storageInfo={storageInfo}
+                                    />
                                 </aside>
                             )}
                         </div>
@@ -526,7 +626,7 @@ export default function App() {
             {detailsFile && (
                 <FileDetailsPanel
                     file={detailsFile}
-                    isStarred={starredIds.has(detailsFile.id)}
+                    isStarred={detailsFile.is_starred}
                     onClose={() => setDetailsFile(null)}
                     onDownload={downloadFile}
                     onStar={handleStar}
@@ -540,7 +640,7 @@ export default function App() {
                     x={contextMenu.x}
                     y={contextMenu.y}
                     file={contextMenu.file}
-                    isStarred={starredIds.has(contextMenu.file.id)}
+                    isStarred={contextMenu.file.is_starred}
                     onClose={() => setContextMenu(null)}
                     onPreview={() => setPreviewFile(contextMenu.file)}
                     onDownload={() => downloadFile(contextMenu.file)}

@@ -22,10 +22,13 @@ export default function Sidebar({
     theme,
     onToggleTheme,
     files,
+    storageInfo,
     trashedCount,
     starredCount,
     isCollapsed,
     onToggleCollapse,
+    isMobileOpen,
+    onMobileClose,
 }) {
     const navItems = [
         { id: "home", icon: Home, label: "Home" },
@@ -35,8 +38,13 @@ export default function Sidebar({
         { id: "trash", icon: Trash2, label: "Trash", count: trashedCount },
     ];
 
+    const handleNavClick = (id) => {
+        onNavigate(id);
+        if (onMobileClose) onMobileClose();
+    };
+
     return (
-        <aside className={`sidebar ${isCollapsed ? "collapsed" : ""}`}>
+        <aside className={`sidebar ${isCollapsed ? "collapsed" : ""} ${isMobileOpen ? "mobile-open" : ""}`}>
             {/* Collapse toggle button */}
             <button
                 className="sidebar-toggle"
@@ -68,7 +76,7 @@ export default function Sidebar({
                         <button
                             key={item.id}
                             className={`nav-item ${currentView === item.id ? "active" : ""}`}
-                            onClick={() => onNavigate(item.id)}
+                            onClick={() => handleNavClick(item.id)}
                             title={isCollapsed ? item.label : undefined}
                         >
                             <Icon size={20} />
@@ -88,7 +96,7 @@ export default function Sidebar({
             </button>
 
             {/* Storage - only show when not collapsed */}
-            {!isCollapsed && <StorageChart files={files} />}
+            {!isCollapsed && <StorageChart files={files} storageInfo={storageInfo} />}
         </aside>
     );
 }

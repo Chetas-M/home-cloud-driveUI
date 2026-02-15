@@ -1,0 +1,113 @@
+version: '3.8'
+
+services:
+  # ===========================================
+  # Backend API (FastAPI)
+  # ===========================================
+  backend:
+    build: ./backend
+    container_name: homecloud-api
+    restart: unless-stopped
+
+    # Internal port only - not exposed to host
+    expose:
+      - "8000"
+
+    volumes:
+      - homecloud_storage:/app/storage
+      - homecloud_data:/app/data
+
+    environment:
+      # Security: Use .env file for secrets (never commit to git)
+      - SECRET_KEY=${SECRET_KEY:?SECRET_KEY must be set in .env}
+      - DATABASE_URL=sqlite+aiosqlite:///./data/homecloud.db
+      - STORAGE_PATH=/app/storage
+      - MAX_STORAGE_BYTES=${MAX_STORAGE_BYTES:-107374182400}
+      - ACCESS_TOKEN_EXPIRE_MINUTES=${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+      - CORS_ORIGINS=${CORS_ORIGINS:-http://192.168.1.8:3001,http://localhost:3001}
+
+    # Security: Run as non-root user
+    user: "1000:1000"
+
+    # Security: Read-only root filesystem where possible
+    read_only: false
+
+    # Security: Limit resources
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+        reservations:
+          memory: 64M
+
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+    networks:
+      - homecloud_internal
+
+  # ===========================================
+  # Frontend (Nginx serving React build)
+  # ===========================================
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: homecloud-ui
+    restart: unless-stopped
+
+    ports:
+      - "3001:80"
+
+    depends_on:
+      backend:
+        condition: service_healthy
+
+    # Security: Read-only root filesystem
+    read_only: true
+    tmpfs:
+      - /var/cache/nginx
+      - /var/run
+      - /tmp
+
+    # Security: Limit resources
+    deploy:
+      resources:
+        limits:
+          memory: 64M
+        reservations:
+          memory: 16M
+
+    networks:
+      - homecloud_internal
+    # Security headers handled by nginx.conf
+
+    # ===========================================
+    # Named volumes for data persistence
+    # ===========================================
+volumes:
+  homecloud_storage:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${STORAGE_PATH:-/mnt/homecloud/storage}
+
+  homecloud_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${DATA_PATH:-/mnt/homecloud/data}
+
+# ===========================================
+# Internal network (not exposed)
+# ===========================================
+networks:
+  homecloud_internal:
+    driver: bridge
+    internal: false
