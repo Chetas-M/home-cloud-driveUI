@@ -31,6 +31,7 @@ export default function App() {
     const [searchQuery, setSearchQuery] = useState("");
     const [isDragging, setIsDragging] = useState(false);
     const [uploadProgress, setUploadProgress] = useState({});
+    const uploadAbortRef = React.useRef(null);
     const [loading, setLoading] = useState(false);
 
     // View/Navigation state
@@ -161,37 +162,93 @@ export default function App() {
     /* ---------------- UPLOAD ---------------- */
     const handleUpload = async (fileList) => {
         const filesArray = Array.from(fileList);
+        const totalFiles = filesArray.length;
 
-        // Show progress
+        // Initialize progress for all files
+        const initialProgress = {};
         filesArray.forEach((file, i) => {
-            setUploadProgress((p) => ({
-                ...p,
-                [i]: { name: file.name, progress: 0 },
-            }));
+            initialProgress[i] = {
+                name: file.name,
+                size: file.size,
+                loaded: 0,
+                total: file.size,
+                percent: 0,
+                speed: 0,
+                eta: 0,
+                status: 'waiting', // waiting | uploading | done | error
+                fileIndex: i + 1,
+                totalFiles,
+            };
         });
+        setUploadProgress(initialProgress);
 
         try {
-            // Simulate progress
-            const progressInterval = setInterval(() => {
-                setUploadProgress((p) => {
+            // Upload files sequentially for accurate per-file progress
+            for (let i = 0; i < filesArray.length; i++) {
+                const file = filesArray[i];
+
+                // Mark as uploading
+                setUploadProgress(p => ({
+                    ...p,
+                    [i]: { ...p[i], status: 'uploading' },
+                }));
+
+                const { promise, abort } = api.uploadFileWithProgress(
+                    file,
+                    currentPath,
+                    (progress) => {
+                        setUploadProgress(p => ({
+                            ...p,
+                            [i]: {
+                                ...p[i],
+                                loaded: progress.loaded,
+                                total: progress.total,
+                                percent: progress.percent,
+                                speed: progress.speed,
+                                eta: progress.eta,
+                                status: 'uploading',
+                            },
+                        }));
+                    }
+                );
+
+                uploadAbortRef.current = abort;
+                await promise;
+
+                // Mark as done
+                setUploadProgress(p => ({
+                    ...p,
+                    [i]: { ...p[i], percent: 100, status: 'done', speed: 0, eta: 0 },
+                }));
+            }
+
+            // Clear progress after brief delay
+            setTimeout(() => setUploadProgress({}), 1500);
+            loadFiles();
+        } catch (err) {
+            if (err.message === 'Upload cancelled') {
+                setUploadProgress({});
+            } else {
+                console.error("Upload failed:", err);
+                // Mark failed uploads
+                setUploadProgress(p => {
                     const updated = { ...p };
-                    Object.keys(updated).forEach((key) => {
-                        if (updated[key].progress < 90) {
-                            updated[key].progress += 10;
+                    Object.keys(updated).forEach(key => {
+                        if (updated[key].status === 'uploading' || updated[key].status === 'waiting') {
+                            updated[key].status = 'error';
                         }
                     });
                     return updated;
                 });
-            }, 100);
+                setTimeout(() => setUploadProgress({}), 3000);
+            }
+        }
+        uploadAbortRef.current = null;
+    };
 
-            await api.uploadFiles(filesArray, currentPath);
-
-            clearInterval(progressInterval);
-            setUploadProgress({});
-            loadFiles();
-        } catch (err) {
-            console.error("Upload failed:", err);
-            setUploadProgress({});
+    const cancelUpload = () => {
+        if (uploadAbortRef.current) {
+            uploadAbortRef.current();
         }
     };
 
@@ -626,7 +683,7 @@ export default function App() {
                     )}
                 </div>
 
-                <UploadProgress uploads={uploadProgress} />
+                <UploadProgress uploads={uploadProgress} onCancel={cancelUpload} />
             </main>
 
             {/* Details Panel */}

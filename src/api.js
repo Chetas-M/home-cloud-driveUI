@@ -132,6 +132,84 @@ class ApiService {
         });
     }
 
+    /**
+     * Upload a single file with real-time progress tracking via XMLHttpRequest.
+     * @param {File} file - The file to upload
+     * @param {Array} path - Current folder path
+     * @param {Function} onProgress - Callback: ({ loaded, total, percent, speed, eta })
+     * @returns {{ promise: Promise, abort: Function }}
+     */
+    uploadFileWithProgress(file, path = [], onProgress) {
+        const formData = new FormData();
+        formData.append('files', file);
+
+        const params = new URLSearchParams();
+        params.append('path', JSON.stringify(path));
+
+        const url = `${API_BASE_URL}/files/upload?${params.toString()}`;
+        const token = this.getToken();
+
+        const xhr = new XMLHttpRequest();
+        let startTime = Date.now();
+        let lastLoaded = 0;
+        let lastTime = startTime;
+        let speedSamples = [];
+
+        const promise = new Promise((resolve, reject) => {
+            xhr.open('POST', url);
+            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+
+            xhr.upload.onprogress = (e) => {
+                if (!e.lengthComputable) return;
+
+                const now = Date.now();
+                const elapsed = (now - lastTime) / 1000;
+
+                if (elapsed >= 0.3) {
+                    const bytesPerSec = (e.loaded - lastLoaded) / elapsed;
+                    speedSamples.push(bytesPerSec);
+                    if (speedSamples.length > 5) speedSamples.shift();
+                    lastLoaded = e.loaded;
+                    lastTime = now;
+                }
+
+                const avgSpeed = speedSamples.length > 0
+                    ? speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length
+                    : 0;
+                const remaining = e.total - e.loaded;
+                const eta = avgSpeed > 0 ? Math.ceil(remaining / avgSpeed) : 0;
+                const percent = Math.round((e.loaded / e.total) * 100);
+
+                onProgress?.({
+                    loaded: e.loaded,
+                    total: e.total,
+                    percent,
+                    speed: avgSpeed,
+                    eta,
+                });
+            };
+
+            xhr.onload = () => {
+                if (xhr.status >= 200 && xhr.status < 300) {
+                    try {
+                        resolve(JSON.parse(xhr.responseText));
+                    } catch {
+                        resolve(xhr.responseText);
+                    }
+                } else {
+                    reject(new Error(`Upload failed: ${xhr.status}`));
+                }
+            };
+
+            xhr.onerror = () => reject(new Error('Upload network error'));
+            xhr.onabort = () => reject(new Error('Upload cancelled'));
+
+            xhr.send(formData);
+        });
+
+        return { promise, abort: () => xhr.abort() };
+    }
+
     async downloadFile(fileId) {
         const response = await fetch(`${API_BASE_URL}/files/${fileId}/download`, {
             headers: {

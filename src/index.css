@@ -778,62 +778,99 @@ body {
   position: fixed;
   bottom: 24px;
   right: 24px;
+  z-index: 500;
+  background: var(--bg-secondary);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-lg);
+  width: 380px;
+  max-height: 400px;
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  z-index: 500;
-}
-
-.upload-item {
-  background: var(--bg-secondary);
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
-  border: var(--border-glass);
-  border-radius: var(--radius-md);
-  padding: 16px 20px;
-  min-width: 280px;
-  box-shadow: var(--shadow-lg);
   animation: slideUp 0.3s ease;
+  overflow: hidden;
 }
 
-.upload-item-header {
+.upload-progress-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 10px;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--border-color);
 }
 
-.upload-item-name {
+.upload-progress-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
   font-size: 0.9rem;
-  font-weight: 500;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 180px;
-}
-
-.upload-item-percent {
-  font-size: 0.85rem;
-  color: var(--accent-blue);
   font-weight: 600;
+  color: var(--text-primary);
 }
 
-.upload-bar {
-  height: 4px;
+.upload-progress-title svg {
+  color: var(--accent-blue);
+}
+
+.upload-progress-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.upload-speed-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: rgba(56, 189, 248, 0.12);
+  color: var(--accent-blue);
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 8px;
+  border-radius: 12px;
+  white-space: nowrap;
+}
+
+.upload-speed-badge svg {
+  color: var(--accent-blue);
+}
+
+.upload-cancel-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(239, 68, 68, 0.1);
+  color: #ef4444;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.upload-cancel-btn:hover {
+  background: rgba(239, 68, 68, 0.25);
+  transform: scale(1.1);
+}
+
+.upload-bar.overall {
+  height: 3px;
   background: var(--bg-tertiary);
-  border-radius: 2px;
-  overflow: hidden;
+  flex-shrink: 0;
 }
 
-.upload-bar-fill {
+.upload-bar .upload-bar-fill {
   height: 100%;
   background: var(--gradient-primary);
   border-radius: 2px;
-  transition: width 0.1s linear;
+  transition: width 0.3s ease;
   position: relative;
 }
 
-.upload-bar-fill::after {
+.upload-bar .upload-bar-fill::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -843,6 +880,108 @@ body {
       transparent);
   animation: shimmer 1.5s infinite;
   background-size: 200% 100%;
+}
+
+.upload-file-list {
+  overflow-y: auto;
+  max-height: 300px;
+  padding: 4px 0;
+}
+
+.upload-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 16px;
+  transition: background 0.2s ease;
+}
+
+.upload-item:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.upload-item.uploading {
+  background: rgba(56, 189, 248, 0.04);
+}
+
+.upload-item.done {
+  opacity: 0.65;
+}
+
+.upload-item.error {
+  background: rgba(239, 68, 68, 0.05);
+}
+
+.upload-status-icon {
+  flex-shrink: 0;
+}
+
+.upload-status-icon.uploading {
+  color: var(--accent-blue);
+  animation: pulse 1.5s ease-in-out infinite;
+}
+
+.upload-status-icon.done {
+  color: var(--accent-green);
+}
+
+.upload-status-icon.error {
+  color: #ef4444;
+}
+
+.upload-status-icon.waiting {
+  color: var(--text-muted);
+}
+
+.upload-item-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.upload-item-name {
+  font-size: 0.85rem;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text-primary);
+}
+
+.upload-item-meta {
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.upload-item-percent {
+  font-size: 0.8rem;
+  color: var(--accent-blue);
+  font-weight: 600;
+  flex-shrink: 0;
+  min-width: 36px;
+  text-align: right;
+}
+
+.upload-item.done .upload-item-percent {
+  color: var(--accent-green);
+}
+
+.upload-item.error .upload-item-percent {
+  color: #ef4444;
+}
+
+@keyframes pulse {
+
+  0%,
+  100% {
+    opacity: 1;
+  }
+
+  50% {
+    opacity: 0.4;
+  }
 }
 
 /* ---------- SCROLLBAR ---------- */
@@ -3231,16 +3370,51 @@ body {
     font-size: 0.9rem;
   }
 
-  /* Upload progress container */
+  /* Upload progress container - full width on tablet */
   .upload-progress-container {
     left: 16px;
     right: 16px;
     bottom: 16px;
+    width: auto;
   }
 
-  .upload-item {
-    min-width: auto;
-    width: 100%;
+  /* Admin panel - tablet */
+  .admin-stats-grid {
+    grid-template-columns: repeat(2, 1fr);
+    gap: 12px;
+  }
+
+  .admin-table-wrapper {
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .admin-table {
+    min-width: 600px;
+  }
+
+  .admin-table th,
+  .admin-table td {
+    padding: 10px 12px;
+    font-size: 0.85rem;
+  }
+
+  .admin-section {
+    padding: 16px;
+  }
+
+  .admin-header {
+    padding: 16px;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  /* Share modal - full width */
+  .share-modal {
+    width: 95%;
+    max-width: none;
+    padding: 20px;
   }
 
   /* Auth page adjustments */
@@ -3382,6 +3556,43 @@ body {
   /* Move modal folder list */
   .move-folder-list {
     max-height: 200px;
+  }
+
+  /* Admin panel - mobile */
+  .admin-stats-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .admin-stat-card {
+    padding: 14px;
+  }
+
+  .admin-stat-value {
+    font-size: 1.3rem;
+  }
+
+  .admin-user-email {
+    display: none;
+  }
+
+  .admin-section-title {
+    font-size: 1rem;
+  }
+
+  /* Upload progress - mobile */
+  .upload-progress-container {
+    left: 8px;
+    right: 8px;
+    bottom: 12px;
+    width: auto;
+  }
+
+  .upload-progress-header {
+    padding: 10px 12px;
+  }
+
+  .upload-item {
+    padding: 8px 12px;
   }
 }
 
