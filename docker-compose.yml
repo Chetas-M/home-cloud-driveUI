@@ -84,11 +84,10 @@ services:
 
     networks:
       - homecloud_internal
-    # Security headers handled by nginx.conf
 
-    # ===========================================
-    # Named volumes for data persistence
-    # ===========================================
+# ===========================================
+# Named volumes for data persistence
+# ===========================================
 volumes:
   homecloud_storage:
     driver: local

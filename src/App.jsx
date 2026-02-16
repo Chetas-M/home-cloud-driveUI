@@ -15,6 +15,8 @@ import TrashView from "./components/TrashView";
 import ActivityLog from "./components/ActivityLog";
 import StorageChart from "./components/StorageChart";
 import AuthPage from "./components/AuthPage";
+import AdminPanel from "./components/AdminPanel";
+import ShareModal from "./components/ShareModal";
 import api from "./api";
 
 export default function App() {
@@ -54,6 +56,7 @@ export default function App() {
     const [showNewFolderModal, setShowNewFolderModal] = useState(false);
     const [renameFile, setRenameFile] = useState(null);
     const [moveFile, setMoveFile] = useState(null);
+    const [shareFile, setShareFile] = useState(null);
 
     /* ---------------- AUTH CHECK ---------------- */
     useEffect(() => {
@@ -414,6 +417,7 @@ export default function App() {
         recent: "Recent",
         activity: "Activity",
         trash: "Trash",
+        admin: "Admin Panel",
     };
 
     /* ---------------- DRAG HANDLERS ---------------- */
@@ -501,6 +505,7 @@ export default function App() {
                 onToggleCollapse={() => setSidebarCollapsed(!sidebarCollapsed)}
                 isMobileOpen={isMobileMenuOpen}
                 onMobileClose={() => setIsMobileMenuOpen(false)}
+                user={user}
             />
 
             <main
@@ -510,7 +515,7 @@ export default function App() {
                 onDragLeave={handleDragLeave}
                 onDrop={handleDrop}
             >
-                {currentView !== "activity" && currentView !== "trash" && (
+                {currentView !== "activity" && currentView !== "trash" && currentView !== "admin" && (
                     <Header
                         currentPath={currentPath}
                         searchQuery={searchQuery}
@@ -550,6 +555,8 @@ export default function App() {
                         />
                     ) : currentView === "activity" ? (
                         <ActivityLog activities={activityLog} />
+                    ) : currentView === "admin" && user?.is_admin ? (
+                        <AdminPanel />
                     ) : (
                         <div className="file-content-wrapper">
                             {/* Main files area */}
@@ -650,6 +657,7 @@ export default function App() {
                     onCopy={() => handleCopy(contextMenu.file)}
                     onTrash={() => handleTrash(contextMenu.file.id)}
                     onDetails={() => setDetailsFile(contextMenu.file)}
+                    onShare={() => setShareFile(contextMenu.file)}
                 />
             )}
 
@@ -689,6 +697,14 @@ export default function App() {
                     currentPath={moveFile.path}
                     onClose={() => setMoveFile(null)}
                     onMove={handleMove}
+                />
+            )}
+
+            {/* Share Modal */}
+            {shareFile && (
+                <ShareModal
+                    file={shareFile}
+                    onClose={() => setShareFile(null)}
                 />
             )}
         </div>

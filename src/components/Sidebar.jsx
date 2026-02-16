@@ -12,6 +12,7 @@ import {
     Moon,
     ChevronLeft,
     ChevronRight,
+    Shield,
 } from "lucide-react";
 import StorageChart from "./StorageChart";
 
@@ -29,6 +30,7 @@ export default function Sidebar({
     onToggleCollapse,
     isMobileOpen,
     onMobileClose,
+    user,
 }) {
     const navItems = [
         { id: "home", icon: Home, label: "Home" },
@@ -88,6 +90,20 @@ export default function Sidebar({
                     );
                 })}
             </nav>
+
+            {/* Admin Nav */}
+            {user?.is_admin && (
+                <nav className="sidebar-nav sidebar-admin-nav">
+                    <button
+                        className={`nav-item admin-nav-item ${currentView === "admin" ? "active" : ""}`}
+                        onClick={() => handleNavClick("admin")}
+                        title={isCollapsed ? "Admin Panel" : undefined}
+                    >
+                        <Shield size={20} />
+                        {!isCollapsed && <span>Admin Panel</span>}
+                    </button>
+                </nav>
+            )}
 
             {/* Theme toggle */}
             <button className="theme-toggle" onClick={onToggleTheme} title={theme === "dark" ? "Light Mode" : "Dark Mode"}>

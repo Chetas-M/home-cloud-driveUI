@@ -199,6 +199,76 @@ class ApiService {
             method: 'DELETE',
         });
     }
+
+    // ============ ADMIN ============
+    async listUsers() {
+        return this.request('/admin/users');
+    }
+
+    async getUser(userId) {
+        return this.request(`/admin/users/${userId}`);
+    }
+
+    async updateUser(userId, updates) {
+        return this.request(`/admin/users/${userId}`, {
+            method: 'PATCH',
+            body: JSON.stringify(updates),
+        });
+    }
+
+    async deleteUser(userId) {
+        return this.request(`/admin/users/${userId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async getSystemStats() {
+        return this.request('/admin/stats');
+    }
+
+    // ============ SHARING ============
+    async createShareLink(data) {
+        return this.request('/share', {
+            method: 'POST',
+            body: JSON.stringify(data),
+        });
+    }
+
+    async getMyShareLinks() {
+        return this.request('/share/my-links');
+    }
+
+    async revokeShareLink(linkId) {
+        return this.request(`/share/${linkId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async accessSharedFile(token, password = null) {
+        const params = password ? `?password=${encodeURIComponent(password)}` : '';
+        return this.request(`/share/${token}${params}`, { skipAuth: true });
+    }
+
+    getShareDownloadUrl(token, password = null) {
+        const params = password ? `?password=${encodeURIComponent(password)}` : '';
+        return `${API_BASE_URL}/share/${token}/download${params}`;
+    }
+
+    // ============ SEARCH ============
+    async searchFiles(query, filters = {}) {
+        const params = new URLSearchParams();
+        params.append('q', query);
+        if (filters.type) params.append('type', filters.type);
+        if (filters.dateFrom) params.append('date_from', filters.dateFrom);
+        if (filters.dateTo) params.append('date_to', filters.dateTo);
+
+        return this.request(`/files/search?${params.toString()}`);
+    }
+
+    // ============ THUMBNAILS ============
+    getFileThumbnailUrl(fileId) {
+        return `${API_BASE_URL}/files/${fileId}/thumbnail`;
+    }
 }
 
 export const api = new ApiService();

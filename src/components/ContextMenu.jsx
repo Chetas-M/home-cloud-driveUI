@@ -9,6 +9,7 @@ import {
     Eye,
     Copy,
     Info,
+    Share2,
 } from "lucide-react";
 
 export default function ContextMenu({
@@ -25,6 +26,7 @@ export default function ContextMenu({
     onCopy,
     onTrash,
     onDetails,
+    onShare,
 }) {
     const menuItems = [
         { icon: Eye, label: "Preview", action: onPreview, show: file.type !== "folder" },
@@ -34,6 +36,7 @@ export default function ContextMenu({
         { icon: Edit3, label: "Rename", action: onRename },
         { icon: FolderInput, label: "Move to...", action: onMove },
         { icon: Copy, label: "Make a copy", action: onCopy },
+        { icon: Share2, label: "Share", action: onShare, show: file.type !== "folder" },
         { divider: true },
         { icon: Info, label: "Details", action: onDetails },
         { icon: Trash2, label: "Move to Trash", action: onTrash, danger: true },

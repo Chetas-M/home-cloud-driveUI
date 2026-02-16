@@ -83,3 +83,13 @@ async def authenticate_user(db: AsyncSession, email: str, password: str) -> Opti
     if not verify_password(password, user.password_hash):
         return None
     return user
+
+
+async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
+    """Dependency that requires the current user to be an admin"""
+    if not current_user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required",
+        )
+    return current_user
