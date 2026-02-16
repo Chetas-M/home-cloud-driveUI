@@ -435,11 +435,10 @@ async def delete_file_permanently(
     await db.flush()
 
 
-@router.get("/{file_id}/thumbnail")
+@router.get("/{file_id}/thumbnail", response_model=None)
 async def get_thumbnail(
     file_id: str,
     token: str = Query(None, description="Auth token for img src usage"),
-    current_user: User = None,
     db: AsyncSession = Depends(get_db)
 ):
     """Serve a file's thumbnail image. Accepts token via query param for img src."""
@@ -447,9 +446,10 @@ async def get_thumbnail(
     from jose import jwt, JWTError
     
     _settings = get_settings()
+    current_user = None
     
     # Try to get user from query token
-    if token and not current_user:
+    if token:
         try:
             payload = jwt.decode(token, _settings.secret_key, algorithms=[_settings.algorithm])
             user_id = payload.get("sub")
