@@ -10,6 +10,7 @@ import {
     Star,
     Check,
 } from "lucide-react";
+import api from "../api";
 
 const iconConfig = {
     folder: { Icon: Folder, className: "folder" },
@@ -46,12 +47,16 @@ export default function FileCard({
     const { Icon, className } = config;
     const [thumbnail, setThumbnail] = useState(null);
 
-    // Generate thumbnail for images
+    // Use server thumbnail if available, fallback to client blob
     useEffect(() => {
-        if (file.type === "image" && file.blob) {
+        if (file.thumbnail_url) {
+            setThumbnail(api.getFileThumbnailUrl(file.id));
+        } else if (file.type === "image" && file.blob) {
             const url = URL.createObjectURL(file.blob);
             setThumbnail(url);
             return () => URL.revokeObjectURL(url);
+        } else {
+            setThumbnail(null);
         }
     }, [file]);
 

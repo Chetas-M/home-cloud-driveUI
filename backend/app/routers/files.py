@@ -18,6 +18,7 @@ from app.models import User, File as FileModel, ActivityLog
 from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest
 from app.auth import get_current_user
 from app.config import get_settings
+from app.thumbnails import generate_thumbnail, can_generate_thumbnail
 
 settings = get_settings()
 router = APIRouter(prefix="/api/files", tags=["Files"])
@@ -86,6 +87,7 @@ async def list_files(
     # Convert to response format
     response = []
     for f in files:
+        thumb_url = f"/api/files/{f.id}/thumbnail" if f.thumbnail_path else None
         response.append(FileResponseSchema(
             id=f.id,
             name=f.name,
@@ -95,6 +97,7 @@ async def list_files(
             path=parse_path(f.path),
             is_starred=f.is_starred,
             is_trashed=f.is_trashed,
+            thumbnail_url=thumb_url,
             created_at=f.created_at,
             updated_at=f.updated_at,
         ))
@@ -147,6 +150,12 @@ async def upload_files(
         # Get mime type
         mime_type = file.content_type or mimetypes.guess_type(file.filename)[0]
         
+        # Generate thumbnail for images
+        thumb_path = None
+        if can_generate_thumbnail(file.filename):
+            thumb_dir = os.path.join(user_storage_path, "thumbnails")
+            thumb_path = generate_thumbnail(storage_filepath, thumb_dir, file_id)
+        
         # Create database entry with explicit defaults
         now = datetime.utcnow()
         new_file = FileModel(
@@ -157,6 +166,7 @@ async def upload_files(
             size=file_size,
             path=path,
             storage_path=storage_filepath,
+            thumbnail_path=thumb_path,
             owner_id=current_user.id,
             is_starred=False,
             is_trashed=False,
@@ -177,6 +187,7 @@ async def upload_files(
         )
         db.add(activity)
         
+        thumb_url = f"/api/files/{new_file.id}/thumbnail" if new_file.thumbnail_path else None
         uploaded_files.append(FileResponseSchema(
             id=new_file.id,
             name=new_file.name,
@@ -186,6 +197,7 @@ async def upload_files(
             path=parse_path(new_file.path),
             is_starred=new_file.is_starred,
             is_trashed=new_file.is_trashed,
+            thumbnail_url=thumb_url,
             created_at=new_file.created_at,
             updated_at=new_file.updated_at,
         ))
@@ -409,6 +421,10 @@ async def delete_file_permanently(
     if file.storage_path and os.path.exists(file.storage_path):
         os.remove(file.storage_path)
     
+    # Delete thumbnail if exists
+    if file.thumbnail_path and os.path.exists(file.thumbnail_path):
+        os.remove(file.thumbnail_path)
+    
     # Update user storage
     current_user.storage_used -= file.size
     if current_user.storage_used < 0:
@@ -417,3 +433,50 @@ async def delete_file_permanently(
     # Delete from database
     await db.delete(file)
     await db.flush()
+
+
+@router.get("/{file_id}/thumbnail")
+async def get_thumbnail(
+    file_id: str,
+    token: str = Query(None, description="Auth token for img src usage"),
+    current_user: User = None,
+    db: AsyncSession = Depends(get_db)
+):
+    """Serve a file's thumbnail image. Accepts token via query param for img src."""
+    from app.config import get_settings
+    from jose import jwt, JWTError
+    
+    _settings = get_settings()
+    
+    # Try to get user from query token
+    if token and not current_user:
+        try:
+            payload = jwt.decode(token, _settings.secret_key, algorithms=[_settings.algorithm])
+            user_id = payload.get("sub")
+            if user_id:
+                result = await db.execute(select(User).where(User.id == user_id))
+                current_user = result.scalar_one_or_none()
+        except JWTError:
+            pass
+    
+    if not current_user:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    
+    result = await db.execute(
+        select(FileModel).where(
+            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        )
+    )
+    file = result.scalar_one_or_none()
+    
+    if not file or not file.thumbnail_path:
+        raise HTTPException(status_code=404, detail="Thumbnail not found")
+    
+    if not os.path.exists(file.thumbnail_path):
+        raise HTTPException(status_code=404, detail="Thumbnail file missing")
+    
+    return FileResponse(
+        path=file.thumbnail_path,
+        media_type="image/jpeg",
+        headers={"Cache-Control": "public, max-age=86400"}
+    )

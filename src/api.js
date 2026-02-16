@@ -267,7 +267,8 @@ class ApiService {
 
     // ============ THUMBNAILS ============
     getFileThumbnailUrl(fileId) {
-        return `${API_BASE_URL}/files/${fileId}/thumbnail`;
+        const token = this.getToken();
+        return `${API_BASE_URL}/files/${fileId}/thumbnail?token=${encodeURIComponent(token)}`;
     }
 }
 
