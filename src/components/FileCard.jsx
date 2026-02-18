@@ -133,7 +133,7 @@ export default function FileCard({
                             <div className="file-size">{formatSize(file.size)}</div>
                         )}
                     </div>
-                    {file.type !== "folder" && file.blob && (
+                    {file.type !== "folder" && (
                         <button className="download-btn" onClick={handleDownload}>
                             <Download size={14} />
                             Download
@@ -146,7 +146,7 @@ export default function FileCard({
                     {file.type !== "folder" && (
                         <div className="file-size">{formatSize(file.size)}</div>
                     )}
-                    {file.type !== "folder" && file.blob && (
+                    {file.type !== "folder" && (
                         <div className="file-actions">
                             <button className="download-btn" onClick={handleDownload}>
                                 <Download size={14} />

@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     # Storage (local filesystem)
     storage_path: str = "./storage"
     max_storage_bytes: int = 107374182400  # 100 GB default per user
+    max_file_size_bytes: int = 1073741824  # 1 GB max per file
+    trash_auto_delete_days: int = 30  # Auto-delete trashed files after N days
 
     # CORS - allowed origins for frontend (comma-separated string)
     cors_origins_str: str = "http://localhost:5173,http://localhost:3000,http://localhost"

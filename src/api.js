@@ -323,13 +323,29 @@ class ApiService {
     }
 
     async accessSharedFile(token, password = null) {
-        const params = password ? `?password=${encodeURIComponent(password)}` : '';
-        return this.request(`/share/${token}${params}`, { skipAuth: true });
+        const body = password ? { password } : {};
+        return this.request(`/share/${token}`, {
+            method: 'POST',
+            body: JSON.stringify(body),
+            skipAuth: true,
+        });
     }
 
-    getShareDownloadUrl(token, password = null) {
-        const params = password ? `?password=${encodeURIComponent(password)}` : '';
-        return `${API_BASE_URL}/share/${token}/download${params}`;
+    getShareDownloadUrl(token) {
+        return `${API_BASE_URL}/share/${token}/download`;
+    }
+
+    async downloadSharedFile(token, password = null) {
+        const headers = {};
+        if (password) {
+            headers['X-Share-Password'] = password;
+        }
+        const response = await fetch(`${API_BASE_URL}/share/${token}/download`, { headers });
+        if (!response.ok) {
+            const error = await response.json().catch(() => ({ detail: 'Download failed' }));
+            throw new Error(error.detail || 'Download failed');
+        }
+        return response.blob();
     }
 
     // ============ SEARCH ============

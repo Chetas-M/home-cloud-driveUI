@@ -3,12 +3,13 @@ Home Cloud Drive - Sharing Router
 Provides endpoints for creating and accessing shared file links.
 """
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
+from pydantic import BaseModel
 
 from app.database import get_db
 from app.models import User, File as FileModel, ShareLink, ActivityLog
@@ -18,6 +19,10 @@ from app.config import get_settings
 
 settings = get_settings()
 router = APIRouter(prefix="/api/share", tags=["Sharing"])
+
+
+class ShareAccessRequest(BaseModel):
+    password: Optional[str] = None
 
 
 @router.post("", response_model=ShareLinkResponse, status_code=status.HTTP_201_CREATED)
@@ -51,7 +56,7 @@ async def create_share_link(
         share_link.password_hash = get_password_hash(data.password)
 
     if data.expires_in_hours:
-        share_link.expires_at = datetime.utcnow() + timedelta(hours=data.expires_in_hours)
+        share_link.expires_at = datetime.now(timezone.utc) + timedelta(hours=data.expires_in_hours)
 
     if data.max_downloads:
         share_link.max_downloads = data.max_downloads
@@ -119,13 +124,13 @@ async def get_my_share_links(
     return links
 
 
-@router.get("/{token}")
+@router.post("/{token}")
 async def access_shared_file(
     token: str,
-    password: Optional[str] = Query(None),
+    body: Optional[ShareAccessRequest] = None,
     db: AsyncSession = Depends(get_db)
 ):
-    """Access a shared file (public — no auth required)"""
+    """Access a shared file (public — no auth required). Password sent in body."""
     result = await db.execute(
         select(ShareLink, FileModel)
         .join(FileModel, ShareLink.file_id == FileModel.id)
@@ -142,15 +147,16 @@ async def access_shared_file(
         raise HTTPException(status_code=410, detail="This share link has been revoked")
 
     # Check expiry
-    if link.expires_at and datetime.utcnow() > link.expires_at:
+    if link.expires_at and datetime.now(timezone.utc) > link.expires_at:
         raise HTTPException(status_code=410, detail="This share link has expired")
 
     # Check max downloads
     if link.max_downloads and link.download_count >= link.max_downloads:
         raise HTTPException(status_code=410, detail="Download limit reached")
 
-    # Check password
+    # Check password (from body)
     if link.password_hash:
+        password = body.password if body else None
         if not password:
             raise HTTPException(
                 status_code=401,
@@ -174,10 +180,10 @@ async def access_shared_file(
 @router.get("/{token}/download")
 async def download_shared_file(
     token: str,
-    password: Optional[str] = Query(None),
+    x_share_password: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
 ):
-    """Download a shared file"""
+    """Download a shared file. Password sent via X-Share-Password header."""
     result = await db.execute(
         select(ShareLink, FileModel)
         .join(FileModel, ShareLink.file_id == FileModel.id)
@@ -192,16 +198,16 @@ async def download_shared_file(
     # Validate
     if not link.is_active:
         raise HTTPException(status_code=410, detail="This share link has been revoked")
-    if link.expires_at and datetime.utcnow() > link.expires_at:
+    if link.expires_at and datetime.now(timezone.utc) > link.expires_at:
         raise HTTPException(status_code=410, detail="This share link has expired")
     if link.max_downloads and link.download_count >= link.max_downloads:
         raise HTTPException(status_code=410, detail="Download limit reached")
     if link.permission != "download":
         raise HTTPException(status_code=403, detail="Download not permitted for this link")
 
-    # Check password
+    # Check password (from header)
     if link.password_hash:
-        if not password or not verify_password(password, link.password_hash):
+        if not x_share_password or not verify_password(x_share_password, link.password_hash):
             raise HTTPException(status_code=401, detail="Password required or incorrect")
 
     # Check file on disk

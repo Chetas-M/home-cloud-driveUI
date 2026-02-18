@@ -7,7 +7,7 @@ import uuid
 import aiofiles
 import mimetypes
 from typing import List, Optional
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -22,6 +22,8 @@ from app.thumbnails import generate_thumbnail, can_generate_thumbnail
 
 settings = get_settings()
 router = APIRouter(prefix="/api/files", tags=["Files"])
+
+CHUNK_SIZE = 1024 * 1024  # 1 MB chunks for streaming uploads
 
 
 def get_file_type(filename: str, mime_type: str = None) -> str:
@@ -112,20 +114,7 @@ async def upload_files(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Upload one or more files"""
-    # Check storage quota
-    total_size = 0
-    for file in files:
-        content = await file.read()
-        total_size += len(content)
-        await file.seek(0)  # Reset file position
-    
-    if current_user.storage_quota > 0 and current_user.storage_used + total_size > current_user.storage_quota:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Storage quota exceeded. Available: {current_user.storage_quota - current_user.storage_used} bytes"
-        )
-    
+    """Upload one or more files (streamed to disk in chunks to avoid OOM)"""
     # Ensure storage directory exists
     user_storage_path = os.path.join(settings.storage_path, current_user.id)
     os.makedirs(user_storage_path, exist_ok=True)
@@ -139,13 +128,38 @@ async def upload_files(
         storage_filename = f"{file_id}.{ext}" if ext else file_id
         storage_filepath = os.path.join(user_storage_path, storage_filename)
         
-        # Read file content
-        content = await file.read()
-        file_size = len(content)
+        # Stream file to disk in chunks (never load entire file into RAM)
+        file_size = 0
+        try:
+            async with aiofiles.open(storage_filepath, 'wb') as f:
+                while True:
+                    chunk = await file.read(CHUNK_SIZE)
+                    if not chunk:
+                        break
+                    file_size += len(chunk)
+                    
+                    # Per-file size limit check
+                    if settings.max_file_size_bytes > 0 and file_size > settings.max_file_size_bytes:
+                        await f.close()
+                        os.remove(storage_filepath)
+                        raise HTTPException(
+                            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                            detail=f"File '{file.filename}' exceeds max size of {settings.max_file_size_bytes} bytes"
+                        )
+        except HTTPException:
+            raise
+        except Exception as e:
+            if os.path.exists(storage_filepath):
+                os.remove(storage_filepath)
+            raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
         
-        # Save file
-        async with aiofiles.open(storage_filepath, 'wb') as f:
-            await f.write(content)
+        # Check storage quota after writing
+        if current_user.storage_quota > 0 and current_user.storage_used + file_size > current_user.storage_quota:
+            os.remove(storage_filepath)
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Storage quota exceeded. Available: {current_user.storage_quota - current_user.storage_used} bytes"
+            )
         
         # Get mime type
         mime_type = file.content_type or mimetypes.guess_type(file.filename)[0]
@@ -157,7 +171,7 @@ async def upload_files(
             thumb_path = generate_thumbnail(storage_filepath, thumb_dir, file_id)
         
         # Create database entry with explicit defaults
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         new_file = FileModel(
             id=file_id,
             name=file.filename,
@@ -229,6 +243,11 @@ async def download_file(
     if not file.storage_path or not os.path.exists(file.storage_path):
         raise HTTPException(status_code=404, detail="File not found on disk")
     
+    # Path traversal protection
+    resolved = os.path.realpath(file.storage_path)
+    if not resolved.startswith(os.path.realpath(settings.storage_path)):
+        raise HTTPException(status_code=403, detail="Access denied")
+    
     # Log activity
     activity = ActivityLog(
         user_id=current_user.id,
@@ -292,7 +311,7 @@ async def update_file(
             )
             db.add(activity)
     
-    file.updated_at = datetime.utcnow()
+    file.updated_at = datetime.now(timezone.utc)
     await db.flush()
     await db.refresh(file)
     
@@ -316,7 +335,7 @@ async def trash_file(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Move file to trash"""
+    """Move file or folder to trash (recursive for folders)"""
     result = await db.execute(
         select(FileModel).where(
             and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
@@ -327,9 +346,27 @@ async def trash_file(
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     
+    now = datetime.now(timezone.utc)
     file.is_trashed = True
-    file.trashed_at = datetime.utcnow()
-    file.updated_at = datetime.utcnow()
+    file.trashed_at = now
+    file.updated_at = now
+    
+    # If folder, recursively trash all children
+    if file.type == "folder":
+        folder_path = parse_path(file.path) + [file.name]
+        folder_path_json = json.dumps(folder_path)
+        children_result = await db.execute(
+            select(FileModel).where(
+                and_(
+                    FileModel.owner_id == current_user.id,
+                    FileModel.path.like(f'{folder_path_json[:-1]}%'),
+                    FileModel.is_trashed == False,
+                )
+            )
+        )
+        for child in children_result.scalars().all():
+            child.is_trashed = True
+            child.trashed_at = now
     
     activity = ActivityLog(
         user_id=current_user.id,
@@ -361,7 +398,7 @@ async def restore_file(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Restore file from trash"""
+    """Restore file or folder from trash (recursive for folders)"""
     result = await db.execute(
         select(FileModel).where(
             and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
@@ -374,7 +411,24 @@ async def restore_file(
     
     file.is_trashed = False
     file.trashed_at = None
-    file.updated_at = datetime.utcnow()
+    file.updated_at = datetime.now(timezone.utc)
+    
+    # If folder, recursively restore all children
+    if file.type == "folder":
+        folder_path = parse_path(file.path) + [file.name]
+        folder_path_json = json.dumps(folder_path)
+        children_result = await db.execute(
+            select(FileModel).where(
+                and_(
+                    FileModel.owner_id == current_user.id,
+                    FileModel.path.like(f'{folder_path_json[:-1]}%'),
+                    FileModel.is_trashed == True,
+                )
+            )
+        )
+        for child in children_result.scalars().all():
+            child.is_trashed = False
+            child.trashed_at = None
     
     activity = ActivityLog(
         user_id=current_user.id,
@@ -406,7 +460,7 @@ async def delete_file_permanently(
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
-    """Permanently delete a file"""
+    """Permanently delete a file or folder (recursive for folders)"""
     result = await db.execute(
         select(FileModel).where(
             and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
@@ -417,7 +471,30 @@ async def delete_file_permanently(
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     
-    # Delete file from disk
+    # If folder, recursively delete all children first
+    if file.type == "folder":
+        folder_path = parse_path(file.path) + [file.name]
+        folder_path_json = json.dumps(folder_path)
+        children_result = await db.execute(
+            select(FileModel).where(
+                and_(
+                    FileModel.owner_id == current_user.id,
+                    FileModel.path.like(f'{folder_path_json[:-1]}%'),
+                )
+            )
+        )
+        for child in children_result.scalars().all():
+            # Delete child's disk file
+            if child.storage_path and os.path.exists(child.storage_path):
+                os.remove(child.storage_path)
+            # Delete child's thumbnail
+            if child.thumbnail_path and os.path.exists(child.thumbnail_path):
+                os.remove(child.thumbnail_path)
+            # Update storage
+            current_user.storage_used -= child.size
+            await db.delete(child)
+    
+    # Delete the file/folder itself from disk
     if file.storage_path and os.path.exists(file.storage_path):
         os.remove(file.storage_path)
     
@@ -474,6 +551,11 @@ async def get_thumbnail(
     
     if not os.path.exists(file.thumbnail_path):
         raise HTTPException(status_code=404, detail="Thumbnail file missing")
+    
+    # Path traversal protection
+    resolved = os.path.realpath(file.thumbnail_path)
+    if not resolved.startswith(os.path.realpath(settings.storage_path)):
+        raise HTTPException(status_code=403, detail="Access denied")
     
     return FileResponse(
         path=file.thumbnail_path,

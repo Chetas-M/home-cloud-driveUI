@@ -3,7 +3,7 @@ Home Cloud Drive - Folders Router
 """
 import json
 from typing import List
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
@@ -127,11 +127,11 @@ async def delete_folder(
     # Trash all children
     for child in children:
         child.is_trashed = True
-        child.trashed_at = datetime.utcnow()
+        child.trashed_at = datetime.now(timezone.utc)
     
     # Trash the folder itself
     folder.is_trashed = True
-    folder.trashed_at = datetime.utcnow()
+    folder.trashed_at = datetime.now(timezone.utc)
     
     # Log activity
     activity = ActivityLog(

@@ -112,6 +112,10 @@ async def empty_trash(
         if file.storage_path and os.path.exists(file.storage_path):
             os.remove(file.storage_path)
         
+        # Delete thumbnail from disk
+        if file.thumbnail_path and os.path.exists(file.thumbnail_path):
+            os.remove(file.thumbnail_path)
+        
         total_freed += file.size
         await db.delete(file)
     

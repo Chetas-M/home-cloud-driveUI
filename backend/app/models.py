@@ -3,7 +3,7 @@ Home Cloud Drive - SQLAlchemy Models
 """
 from sqlalchemy import Column, String, Integer, Boolean, DateTime, ForeignKey, Text, BigInteger
 from sqlalchemy.orm import relationship
-from datetime import datetime
+from datetime import datetime, timezone
 import uuid
 import secrets
 
@@ -28,8 +28,8 @@ class User(Base):
     is_admin = Column(Boolean, default=False)
     storage_used = Column(BigInteger, default=0)  # bytes
     storage_quota = Column(BigInteger, default=107374182400)  # 100 GB
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
     # Relationships
     files = relationship("File", back_populates="owner", cascade="all, delete-orphan")
@@ -60,8 +60,8 @@ class File(Base):
     trashed_at = Column(DateTime, nullable=True)
     
     # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
 
 
 class ShareLink(Base):
@@ -77,7 +77,7 @@ class ShareLink(Base):
     max_downloads = Column(Integer, nullable=True)
     download_count = Column(Integer, default=0)
     is_active = Column(Boolean, default=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Relationships
     file = relationship("File")
@@ -91,4 +91,4 @@ class ActivityLog(Base):
     user_id = Column(String(36), ForeignKey("users.id"), nullable=False)
     action = Column(String(50), nullable=False)  # upload, download, rename, trash, etc.
     file_name = Column(String(255), nullable=False)
-    timestamp = Column(DateTime, default=datetime.utcnow)
+    timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
