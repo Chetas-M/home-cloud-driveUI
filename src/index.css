@@ -1789,6 +1789,14 @@ body {
   border-top: 1px solid var(--border-glass);
 }
 
+.storage-quota-label {
+  text-align: center;
+  font-size: 0.75rem;
+  color: var(--accent-primary);
+  margin-top: 4px;
+  font-weight: 500;
+}
+
 /* ---------- ACTIVITY LOG ---------- */
 .activity-log {
   padding: 24px 32px;
@@ -3248,13 +3256,10 @@ body {
     display: none;
   }
 
-  /* Smaller view toggle */
+  /* Hide multi-select and view toggle on mobile */
+  .header-btn[title="Multi-select"],
   .view-toggle {
-    padding: 2px;
-  }
-
-  .view-btn {
-    padding: 6px 10px;
+    display: none;
   }
 
   /* Selected count smaller */
