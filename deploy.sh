@@ -37,7 +37,7 @@ fi
 docker compose up -d
 sleep 3
 
-if docker compose ps | grep -q "running"; then
+if docker compose ps | grep -qE "Up|running|Healthy"; then
     echo -e "${GREEN}✓ Deployed! Access at http://$(hostname -I | awk '{print $1}'):3001${NC}"
 else
     echo -e "${RED}✗ Failed — check: docker compose logs${NC}"
