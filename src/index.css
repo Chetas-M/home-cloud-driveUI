@@ -2234,23 +2234,26 @@ body {
 
 .auth-toggle-password {
   position: absolute;
-  right: 4px;
-  top: 50%;
-  transform: translateY(-50%);
-  background: transparent;
+  right: 1px;
+  top: 1px;
+  bottom: 1px;
+  width: 46px;
+  background: var(--bg-tertiary);
   border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
   color: var(--text-muted);
   cursor: pointer;
-  padding: 8px 10px;
   display: flex;
   align-items: center;
   justify-content: center;
-  transition: color var(--transition-fast);
+  transition: all var(--transition-fast);
   z-index: 2;
 }
 
 .auth-toggle-password:hover {
   color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .auth-submit {
