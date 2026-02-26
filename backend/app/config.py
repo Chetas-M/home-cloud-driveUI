@@ -2,6 +2,7 @@
 Home Cloud Drive - Configuration Settings
 """
 from pydantic_settings import BaseSettings
+from pydantic import AliasChoices, field_validator
 from functools import lru_cache
 from typing import List
 
@@ -22,19 +23,26 @@ class Settings(BaseSettings):
     trash_auto_delete_days: int = 30  # Auto-delete trashed files after N days
 
     # CORS - allowed origins for frontend (comma-separated string)
+    # Accepts both CORS_ORIGINS and CORS_ORIGINS_STR env var names
     cors_origins_str: str = "http://localhost:5173,http://localhost:3000,http://localhost"
 
-    # Registration control - set to false to disable new user registration
-    allow_registration: bool = True
+    @field_validator('cors_origins_str', mode='before')
+    @classmethod
+    def parse_cors(cls, v):
+        """Accept CORS_ORIGINS env var (pydantic-settings maps it here via alias)"""
+        if isinstance(v, list):
+            return ','.join(v)
+        return v
 
     @property
     def cors_origins(self) -> List[str]:
         """Parse CORS origins from comma-separated string"""
         return [origin.strip() for origin in self.cors_origins_str.split(',') if origin.strip()]
 
-    class Config:
-        env_file = ".env"
-        extra = "ignore"
+    # Registration control - set to false to disable new user registration
+    allow_registration: bool = True
+
+    model_config = {"env_file": ".env", "extra": "ignore"}
 
 
 @lru_cache()

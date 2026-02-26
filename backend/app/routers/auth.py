@@ -2,9 +2,11 @@
 Home Cloud Drive - Authentication Router
 """
 from datetime import timedelta
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 from app.database import get_db
 from app.models import User
@@ -22,9 +24,13 @@ from app.config import get_settings
 settings = get_settings()
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
 
+# Rate limiter — uses client IP (X-Forwarded-For from nginx)
+limiter = Limiter(key_func=get_remote_address)
+
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
-async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
+@limiter.limit("10/minute")
+async def register(request: Request, user_data: UserCreate, db: AsyncSession = Depends(get_db)):
     """Register a new user"""
     # Check if registration is enabled
     if not settings.allow_registration:
@@ -65,7 +71,8 @@ async def register(user_data: UserCreate, db: AsyncSession = Depends(get_db)):
 
 
 @router.post("/login", response_model=Token)
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
+@limiter.limit("5/minute")
+async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
     """Login and get access token"""
     user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
@@ -87,3 +94,4 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get current user info"""
     return current_user
+

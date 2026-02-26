@@ -131,6 +131,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate limiting error handler
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+app.state.limiter = None  # slowapi needs this
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
 # Import additional routers
 from app.routers import admin, sharing
 
