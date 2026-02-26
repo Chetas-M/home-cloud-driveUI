@@ -17,6 +17,8 @@ if [ ! -f .env ]; then
     SECRET_KEY=$(openssl rand -hex 32)
     cat > .env << EOF
 SECRET_KEY=${SECRET_KEY}
+STORAGE_PATH=/mnt/homecloud/storage
+DATA_PATH=/mnt/homecloud/data
 MAX_STORAGE_BYTES=0
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 CORS_ORIGINS=*
@@ -24,6 +26,13 @@ EOF
     chmod 600 .env
     echo -e "${GREEN}✓ Generated .env${NC}"
 fi
+
+# Load paths from .env and create directories
+STORAGE_DIR=$(grep -oP 'STORAGE_PATH=\K.*' .env 2>/dev/null || echo "/mnt/homecloud/storage")
+DATA_DIR=$(grep -oP 'DATA_PATH=\K.*' .env 2>/dev/null || echo "/mnt/homecloud/data")
+sudo mkdir -p "$STORAGE_DIR" "$DATA_DIR"
+sudo chown 1000:1000 "$STORAGE_DIR" "$DATA_DIR"
+echo -e "${GREEN}✓ Storage dirs ready${NC}"
 
 # Build & deploy
 if [ "$1" == "--fresh" ]; then
