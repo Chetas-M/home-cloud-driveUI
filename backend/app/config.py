@@ -9,7 +9,27 @@ from typing import List
 
 class Settings(BaseSettings):
     # Security
-    secret_key: str = "dev-secret-key-change-in-production"
+    # Security — no default! App will refuse to start without a real key.
+    secret_key: str
+
+    @field_validator('secret_key')
+    @classmethod
+    def validate_secret_key(cls, v):
+        """Block insecure placeholder keys at startup"""
+        blocked = ['dev-secret', 'change-in-production', 'your-secret', 'example', 'changeme', 'placeholder']
+        v_lower = v.lower()
+        for word in blocked:
+            if word in v_lower:
+                raise ValueError(
+                    f"SECRET_KEY contains '{word}' — set a real key in .env "
+                    f"(generate one with: openssl rand -hex 32)"
+                )
+        if len(v) < 32:
+            raise ValueError(
+                "SECRET_KEY must be at least 32 characters. "
+                "Generate one with: openssl rand -hex 32"
+            )
+        return v
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24 hours
 
