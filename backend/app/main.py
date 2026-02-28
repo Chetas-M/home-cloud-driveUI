@@ -3,7 +3,7 @@ Home Cloud Drive - FastAPI Application Entry Point
 """
 import os
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -117,9 +117,12 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Home Cloud Drive API",
-    description="Personal cloud storage backend with file management, user authentication, and storage tracking",
+    description="Personal cloud storage backend",
     version="2.0.0",
     lifespan=lifespan,
+    docs_url=None,      # Disable /docs in production
+    redoc_url=None,      # Disable /redoc in production
+    openapi_url=None,    # Disable /openapi.json
 )
 
 # CORS middleware
@@ -152,15 +155,15 @@ app.include_router(sharing.router)
 
 @app.get("/")
 async def root():
-    return {
-        "message": "Home Cloud Drive API",
-        "version": "2.0.0",
-        "docs": "/docs",
-    }
+    return {"status": "ok"}
 
 
 @app.get("/health")
-async def health_check():
+async def health_check(request: Request):
+    """Health check — only responds to internal Docker health checks"""
+    client_ip = request.client.host if request.client else ""
+    if client_ip not in ("127.0.0.1", "::1"):
+        raise HTTPException(status_code=404)
     return {"status": "healthy"}
 
 
