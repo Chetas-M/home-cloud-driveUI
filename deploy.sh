@@ -21,10 +21,17 @@ STORAGE_PATH=/mnt/homecloud/storage
 DATA_PATH=/mnt/homecloud/data
 MAX_STORAGE_BYTES=0
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
-CORS_ORIGINS=*
+CORS_ORIGINS=https://cloud.chetas.me,http://localhost:3001
+TUNNEL_TOKEN=
 EOF
     chmod 600 .env
     echo -e "${GREEN}✓ Generated .env${NC}"
+fi
+
+# Check tunnel token
+if ! grep -q 'TUNNEL_TOKEN=.\+' .env 2>/dev/null; then
+    echo -e "${YELLOW}⚠ TUNNEL_TOKEN not set in .env — Cloudflare Tunnel won't start${NC}"
+    echo -e "${YELLOW}  Add it with: echo 'TUNNEL_TOKEN=your-token-here' >> .env${NC}"
 fi
 
 # Load paths from .env and create directories

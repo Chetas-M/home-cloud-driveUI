@@ -59,9 +59,13 @@ services:
     container_name: homecloud-ui
     restart: unless-stopped
 
-    # Only exposed internally to Caddy, not to host
+    # Internal only — Cloudflare Tunnel routes traffic here
     expose:
       - "80"
+
+    # Also expose on host port 3001 for direct LAN access
+    ports:
+      - "3001:80"
 
     depends_on:
       backend:
@@ -86,22 +90,13 @@ services:
       - homecloud_internal
 
   # ===========================================
-  # Caddy - Reverse Proxy with Auto-HTTPS
+  # Cloudflare Tunnel — Auto-HTTPS, no ports needed
   # ===========================================
-  caddy:
-    image: caddy:2-alpine
-    container_name: homecloud-caddy
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: homecloud-tunnel
     restart: unless-stopped
-
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp" # HTTP/3
-
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
+    command: tunnel --no-autoupdate run --token ${TUNNEL_TOKEN:?TUNNEL_TOKEN must be set in .env}
 
     depends_on:
       - frontend
@@ -127,12 +122,9 @@ volumes:
       o: bind
       device: ${DATA_PATH:-/mnt/homecloud/data}
 
-  caddy_data:
-  caddy_config:
-
-    # ===========================================
-    # Internal network (not exposed)
-    # ===========================================
+# ===========================================
+# Internal network (not exposed)
+# ===========================================
 networks:
   homecloud_internal:
     driver: bridge
