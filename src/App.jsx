@@ -352,8 +352,8 @@ export default function App() {
 
     /* ---------------- COPY ---------------- */
     const handleCopy = (file) => {
-        // For now, just show a message - would need backend support for copy
-        console.log("Copy not yet implemented on backend");
+        // TODO: implement backend copy endpoint
+        alert("Copy feature coming soon!");
     };
 
     /* ---------------- SELECTION ---------------- */
