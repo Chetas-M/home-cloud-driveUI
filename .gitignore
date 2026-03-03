@@ -28,3 +28,14 @@ Thumbs.db
 # Logs
 *.log
 npm-debug.log*
+
+# Docker / runtime data
+caddy_data/
+caddy_config/
+storage/
+backend/storage/
+backend/data/
+
+# Coverage
+htmlcov/
+.coverage
