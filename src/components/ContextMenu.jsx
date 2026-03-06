@@ -30,7 +30,7 @@ export default function ContextMenu({
 }) {
     const menuItems = [
         { icon: Eye, label: "Preview", action: onPreview, show: file.type !== "folder" },
-        { icon: Download, label: "Download", action: onDownload, show: file.type !== "folder" && file.blob },
+        { icon: Download, label: "Download", action: onDownload, show: file.type !== "folder" },
         { divider: true },
         { icon: isStarred ? StarOff : Star, label: isStarred ? "Unstar" : "Star", action: onStar },
         { icon: Edit3, label: "Rename", action: onRename },
