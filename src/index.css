@@ -1986,6 +1986,23 @@ body {
   box-shadow: 0 0 0 2px rgba(56, 189, 248, 0.3);
 }
 
+.file-card.drag-over {
+  border-color: var(--accent-green, #34d399);
+  box-shadow: 0 0 0 3px rgba(52, 211, 153, 0.4);
+  background: rgba(52, 211, 153, 0.08);
+  transform: scale(1.02);
+  transition: all 0.15s ease;
+}
+
+.file-card[draggable="true"] {
+  cursor: grab;
+}
+
+.file-card[draggable="true"]:active {
+  cursor: grabbing;
+  opacity: 0.5;
+}
+
 .file-checkbox {
   position: absolute;
   top: 12px;

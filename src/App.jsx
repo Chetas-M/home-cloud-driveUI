@@ -352,6 +352,18 @@ export default function App() {
         }
     };
 
+    /* ---------------- DRAG-DROP MOVE TO FOLDER ---------------- */
+    const handleMoveToFolder = async (fileId, targetFolder) => {
+        const targetPath = [...(targetFolder.path || []), targetFolder.name];
+        try {
+            await api.updateFile(fileId, { path: targetPath });
+            await loadFiles();
+            await loadExtra();
+        } catch (err) {
+            alert(err.message || "Failed to move file");
+        }
+    };
+
     /* ---------------- COPY ---------------- */
     const handleCopy = async (file) => {
         if (file.type === "folder") {
@@ -647,6 +659,7 @@ export default function App() {
                                                     isSelected={selectedIds.has(file.id)}
                                                     isMultiSelect={isMultiSelect}
                                                     onSelect={handleSelect}
+                                                    onMoveToFolder={handleMoveToFolder}
                                                 />
                                             ))}
                                         </div>
@@ -674,6 +687,7 @@ export default function App() {
                                                 isSelected={selectedIds.has(file.id)}
                                                 isMultiSelect={isMultiSelect}
                                                 onSelect={handleSelect}
+                                                onMoveToFolder={handleMoveToFolder}
                                             />
                                         ))}
                                     </div>

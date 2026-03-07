@@ -44,10 +44,12 @@ export default function FileCard({
     isSelected,
     isMultiSelect,
     onSelect,
+    onMoveToFolder,
 }) {
     const config = iconConfig[file.type] || iconConfig.default;
     const { Icon, className } = config;
     const [thumbnail, setThumbnail] = useState(null);
+    const [isDragOver, setIsDragOver] = useState(false);
 
     // Use server thumbnail if available, fallback to client blob
     useEffect(() => {
@@ -92,14 +94,53 @@ export default function FileCard({
         onSelect?.(file.id);
     };
 
+    /* --- Drag: make non-folder files draggable --- */
+    const handleDragStart = (e) => {
+        if (file.type === "folder") return;
+        e.dataTransfer.setData("application/x-file-id", file.id);
+        e.dataTransfer.effectAllowed = "move";
+    };
+
+    /* --- Drop: folders accept file drops --- */
+    const handleFolderDragOver = (e) => {
+        if (file.type !== "folder") return;
+        if (e.dataTransfer.types.includes("application/x-file-id")) {
+            e.preventDefault();
+            e.stopPropagation();
+            e.dataTransfer.dropEffect = "move";
+            setIsDragOver(true);
+        }
+    };
+
+    const handleFolderDragLeave = (e) => {
+        e.stopPropagation();
+        setIsDragOver(false);
+    };
+
+    const handleFolderDrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragOver(false);
+        const draggedFileId = e.dataTransfer.getData("application/x-file-id");
+        if (draggedFileId && file.type === "folder") {
+            onMoveToFolder?.(draggedFileId, file);
+        }
+    };
+
+    const isFolder = file.type === "folder";
+
     return (
         <div
-            className={`file-card ${view === "list" ? "list-item" : ""} ${isSelected ? "selected" : ""
-                }`}
+            className={`file-card ${view === "list" ? "list-item" : ""} ${isSelected ? "selected" : ""} ${isDragOver ? "drag-over" : ""}`}
             onClick={handleClick}
             onDoubleClick={handleDoubleClick}
             onContextMenu={handleContextMenu}
             style={{ animationDelay: `${index * 0.03}s` }}
+            draggable={!isFolder}
+            onDragStart={handleDragStart}
+            onDragOver={isFolder ? handleFolderDragOver : undefined}
+            onDragLeave={isFolder ? handleFolderDragLeave : undefined}
+            onDrop={isFolder ? handleFolderDrop : undefined}
         >
             {/* Checkbox for multi-select */}
             {isMultiSelect && (
