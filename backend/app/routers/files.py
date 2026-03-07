@@ -8,8 +8,8 @@ import aiofiles
 import mimetypes
 from typing import List, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query
-from fastapi.responses import FileResponse
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Request
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 
@@ -622,6 +622,7 @@ PREVIEWABLE_TYPES = {"image", "video", "pdf", "text"}
 
 @router.get("/{file_id}/preview", response_model=None)
 async def preview_file(
+    request: Request,
     file_id: str,
     token: str = Query(None, description="Auth token for iframe/img src usage"),
     db: AsyncSession = Depends(get_db)
@@ -668,10 +669,67 @@ async def preview_file(
     if not resolved.startswith(os.path.realpath(settings.storage_path)):
         raise HTTPException(status_code=403, detail="Access denied")
 
-    return FileResponse(
-        path=file.storage_path,
-        media_type=file.mime_type or "application/octet-stream",
+    # Get file size
+    file_size = os.path.getsize(file.storage_path)
+    media_type = file.mime_type or mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+
+    # Parse Range header for partial content (required for video seeking)
+    range_header = request.headers.get("range")
+
+    if range_header:
+        # Parse "bytes=start-end"
+        try:
+            range_spec = range_header.replace("bytes=", "").strip()
+            parts = range_spec.split("-")
+            start = int(parts[0]) if parts[0] else 0
+            end = int(parts[1]) if parts[1] else file_size - 1
+        except (ValueError, IndexError):
+            start = 0
+            end = file_size - 1
+
+        end = min(end, file_size - 1)
+        content_length = end - start + 1
+
+        def iter_range():
+            with open(file.storage_path, "rb") as f:
+                f.seek(start)
+                remaining = content_length
+                while remaining > 0:
+                    chunk_size = min(65536, remaining)  # 64KB chunks
+                    data = f.read(chunk_size)
+                    if not data:
+                        break
+                    remaining -= len(data)
+                    yield data
+
+        return StreamingResponse(
+            iter_range(),
+            status_code=206,
+            media_type=media_type,
+            headers={
+                "Content-Range": f"bytes {start}-{end}/{file_size}",
+                "Content-Length": str(content_length),
+                "Accept-Ranges": "bytes",
+                "Content-Disposition": f'inline; filename="{file.name}"',
+                "Cache-Control": "private, max-age=3600",
+            }
+        )
+
+    # No Range header — stream the full file in chunks (avoids loading into memory)
+    def iter_file():
+        with open(file.storage_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)  # 64KB chunks
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        iter_file(),
+        media_type=media_type,
         headers={
+            "Content-Length": str(file_size),
+            "Accept-Ranges": "bytes",
             "Content-Disposition": f'inline; filename="{file.name}"',
             "Cache-Control": "private, max-age=3600",
         }
