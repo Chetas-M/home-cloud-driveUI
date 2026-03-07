@@ -35,7 +35,7 @@ export default function ContextMenu({
         { icon: isStarred ? StarOff : Star, label: isStarred ? "Unstar" : "Star", action: onStar },
         { icon: Edit3, label: "Rename", action: onRename },
         { icon: FolderInput, label: "Move to...", action: onMove },
-        { icon: Copy, label: "Make a copy", action: onCopy },
+        { icon: Copy, label: "Make a copy", action: onCopy, show: file.type !== "folder" },
         { icon: Share2, label: "Share", action: onShare, show: file.type !== "folder" },
         { divider: true },
         { icon: Info, label: "Details", action: onDetails },
