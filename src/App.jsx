@@ -17,6 +17,7 @@ import StorageChart from "./components/StorageChart";
 import AuthPage from "./components/AuthPage";
 import AdminPanel from "./components/AdminPanel";
 import ShareModal from "./components/ShareModal";
+import ToastContainer, { showToast } from "./components/ToastContainer";
 import api from "./api";
 
 export default function App() {
@@ -33,6 +34,7 @@ export default function App() {
     const [uploadProgress, setUploadProgress] = useState({});
     const uploadAbortRef = React.useRef(null);
     const [loading, setLoading] = useState(false);
+    const [downloads, setDownloads] = useState({});
 
     // View/Navigation state
     const [currentView, setCurrentView] = useState("home");
@@ -225,6 +227,8 @@ export default function App() {
             // Clear progress after brief delay
             setTimeout(() => setUploadProgress({}), 1500);
             loadFiles();
+            const count = filesArray.length;
+            showToast(`${count} file${count > 1 ? 's' : ''} uploaded`, 'success');
         } catch (err) {
             if (err.message === 'Upload cancelled') {
                 setUploadProgress({});
@@ -241,6 +245,7 @@ export default function App() {
                     return updated;
                 });
                 setTimeout(() => setUploadProgress({}), 3000);
+                showToast('Upload failed', 'error');
             }
         }
         uploadAbortRef.current = null;
@@ -254,16 +259,59 @@ export default function App() {
 
     /* ---------------- DOWNLOAD ---------------- */
     const downloadFile = async (file) => {
+        const dlId = file.id;
+        setDownloads(prev => ({ ...prev, [dlId]: { name: file.name, progress: 0 } }));
         try {
-            const blob = await api.downloadFile(file.id);
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement("a");
-            a.href = url;
-            a.download = file.name;
-            a.click();
-            URL.revokeObjectURL(url);
+            const response = await fetch(`${api.baseUrl || ''}/api/files/${file.id}/download`, {
+                headers: { 'Authorization': `Bearer ${api.getToken()}` },
+            });
+            if (!response.ok) throw new Error('Download failed');
+
+            const contentLength = response.headers.get('content-length');
+            const total = contentLength ? parseInt(contentLength, 10) : 0;
+
+            if (total && response.body) {
+                const reader = response.body.getReader();
+                const chunks = [];
+                let received = 0;
+
+                while (true) {
+                    const { done, value } = await reader.read();
+                    if (done) break;
+                    chunks.push(value);
+                    received += value.length;
+                    const pct = Math.round((received / total) * 100);
+                    setDownloads(prev => ({ ...prev, [dlId]: { name: file.name, progress: pct } }));
+                }
+
+                const blob = new Blob(chunks);
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = file.name;
+                a.click();
+                URL.revokeObjectURL(url);
+            } else {
+                // Fallback: no content-length or no ReadableStream
+                const blob = await response.blob();
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement("a");
+                a.href = url;
+                a.download = file.name;
+                a.click();
+                URL.revokeObjectURL(url);
+            }
+
+            showToast(`Downloaded "${file.name}"`, 'success');
         } catch (err) {
             console.error("Download failed:", err);
+            showToast(`Download failed: ${err.message}`, 'error');
+        } finally {
+            setDownloads(prev => {
+                const next = { ...prev };
+                delete next[dlId];
+                return next;
+            });
         }
     };
 
@@ -272,8 +320,10 @@ export default function App() {
         try {
             await api.createFolder(name, currentPath);
             loadFiles();
+            showToast(`Folder "${name}" created`, 'success');
         } catch (err) {
             console.error("Create folder failed:", err);
+            showToast('Failed to create folder', 'error');
         }
     };
 
@@ -282,12 +332,13 @@ export default function App() {
         try {
             await api.updateFile(id, { name: newName });
             loadFiles();
+            showToast(`Renamed to "${newName}"`, 'success');
         } catch (err) {
             console.error("Rename failed:", err);
+            showToast('Rename failed', 'error');
         }
     };
 
-    /* ---------------- STAR/UNSTAR ---------------- */
     const handleStar = async (id) => {
         const file = files.find((f) => f.id === id);
         if (!file) return;
@@ -296,6 +347,7 @@ export default function App() {
             loadFiles();
         } catch (err) {
             console.error("Star failed:", err);
+            showToast('Failed to update star', 'error');
         }
     };
 
@@ -305,8 +357,10 @@ export default function App() {
             await api.trashFile(id);
             setDetailsFile(null);
             loadFiles();
+            showToast('Moved to trash', 'success');
         } catch (err) {
             console.error("Trash failed:", err);
+            showToast('Failed to trash file', 'error');
         }
     };
 
@@ -359,23 +413,25 @@ export default function App() {
             await api.updateFile(fileId, { path: targetPath });
             await loadFiles();
             await loadExtra();
+            showToast('File moved successfully', 'success');
         } catch (err) {
-            alert(err.message || "Failed to move file");
+            showToast(err.message || 'Failed to move file', 'error');
         }
     };
 
     /* ---------------- COPY ---------------- */
     const handleCopy = async (file) => {
         if (file.type === "folder") {
-            alert("Folder copy is not supported yet.");
+            showToast('Folder copy is not supported yet', 'warning');
             return;
         }
         try {
             await api.copyFile(file.id);
             await loadFiles();
             await loadExtra();
+            showToast(`Copied "${file.name}"`, 'success');
         } catch (err) {
-            alert(err.message || "Failed to copy file");
+            showToast(err.message || 'Failed to copy file', 'error');
         }
     };
 
@@ -400,6 +456,49 @@ export default function App() {
             file,
         });
     };
+
+    /* ---------------- KEYBOARD SHORTCUTS ---------------- */
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            // Don't fire shortcuts when typing in inputs
+            const tag = e.target.tagName;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            if (!user) return;
+
+            // Escape: close modals/selection
+            if (e.key === 'Escape') {
+                if (previewFile) { setPreviewFile(null); return; }
+                if (contextMenu) { setContextMenu(null); return; }
+                if (selectedIds.size > 0) {
+                    setSelectedIds(new Set());
+                    setIsMultiSelect(false);
+                    return;
+                }
+            }
+
+            // Ctrl+A: select all visible files
+            if ((e.ctrlKey || e.metaKey) && e.key === 'a') {
+                e.preventDefault();
+                const allIds = new Set(filteredFiles.map(f => f.id));
+                setSelectedIds(allIds);
+                setIsMultiSelect(true);
+                showToast(`Selected ${allIds.size} items`, 'info', 1500);
+                return;
+            }
+
+            // Delete: trash selected files
+            if (e.key === 'Delete' && selectedIds.size > 0) {
+                e.preventDefault();
+                selectedIds.forEach(id => handleTrash(id));
+                setSelectedIds(new Set());
+                setIsMultiSelect(false);
+                return;
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [user, previewFile, contextMenu, selectedIds, filteredFiles, isMultiSelect]);
 
     /* ---------------- FILTER & SORT ---------------- */
     const getFilteredFiles = () => {
@@ -787,6 +886,29 @@ export default function App() {
                     file={shareFile}
                     onClose={() => setShareFile(null)}
                 />
+            )}
+
+            {/* Toast Notifications */}
+            <ToastContainer />
+
+            {/* Download Progress */}
+            {Object.keys(downloads).length > 0 && (
+                <div className="download-progress">
+                    {Object.entries(downloads).map(([id, dl]) => (
+                        <div key={id} className="download-progress__item">
+                            <div className="download-progress__info">
+                                <div className="download-progress__name">{dl.name}</div>
+                                <div className="download-progress__bar">
+                                    <div
+                                        className="download-progress__fill"
+                                        style={{ width: `${dl.progress}%` }}
+                                    />
+                                </div>
+                            </div>
+                            <span className="download-progress__percent">{dl.progress}%</span>
+                        </div>
+                    ))}
+                </div>
             )}
         </div>
     );
