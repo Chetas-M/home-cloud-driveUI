@@ -18,7 +18,7 @@ from app.models import User, File as FileModel, ActivityLog
 from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest
 from app.auth import get_current_user
 from app.config import get_settings
-from app.thumbnails import generate_thumbnail, can_generate_thumbnail
+from app.thumbnails import generate_thumbnail, can_generate_thumbnail, generate_preview
 
 settings = get_settings()
 router = APIRouter(prefix="/api/files", tags=["Files"])
@@ -164,11 +164,16 @@ async def upload_files(
         # Get mime type
         mime_type = file.content_type or mimetypes.guess_type(file.filename)[0]
         
-        # Generate thumbnail for images
+        # Generate thumbnail and preview for images
         thumb_path = None
+        preview_path = None
         if can_generate_thumbnail(file.filename):
             thumb_dir = os.path.join(user_storage_path, "thumbnails")
             thumb_path = generate_thumbnail(storage_filepath, thumb_dir, file_id)
+            
+            # Generate preview-optimized image for fast web display
+            preview_dir = os.path.join(user_storage_path, "previews")
+            preview_path = generate_preview(storage_filepath, preview_dir, file_id)
         
         # Create database entry with explicit defaults
         now = datetime.now(timezone.utc)
@@ -181,6 +186,7 @@ async def upload_files(
             path=path,
             storage_path=storage_filepath,
             thumbnail_path=thumb_path,
+            preview_path=preview_path,
             owner_id=current_user.id,
             is_starred=False,
             is_trashed=False,
@@ -317,11 +323,16 @@ async def copy_file(
     else:
         copy_name = f"{base_name} (copy)"
 
-    # Generate thumbnail for the copy
+    # Generate thumbnail and preview for the copy
     thumb_path = None
+    preview_path = None
     if can_generate_thumbnail(copy_name):
         thumb_dir = os.path.join(user_storage_path, "thumbnails")
         thumb_path = generate_thumbnail(new_storage_path, thumb_dir, new_id)
+        
+        # Generate preview-optimized image
+        preview_dir = os.path.join(user_storage_path, "previews")
+        preview_path = generate_preview(new_storage_path, preview_dir, new_id)
 
     # Create database entry
     now = datetime.now(timezone.utc)
@@ -334,6 +345,7 @@ async def copy_file(
         path=original.path,
         storage_path=new_storage_path,
         thumbnail_path=thumb_path,
+        preview_path=preview_path,
         owner_id=current_user.id,
         is_starred=False,
         is_trashed=False,
@@ -595,6 +607,9 @@ async def delete_file_permanently(
             # Delete child's thumbnail
             if child.thumbnail_path and os.path.exists(child.thumbnail_path):
                 os.remove(child.thumbnail_path)
+            # Delete child's preview
+            if child.preview_path and os.path.exists(child.preview_path):
+                os.remove(child.preview_path)
             # Update storage
             current_user.storage_used -= child.size
             await db.delete(child)
@@ -606,6 +621,10 @@ async def delete_file_permanently(
     # Delete thumbnail if exists
     if file.thumbnail_path and os.path.exists(file.thumbnail_path):
         os.remove(file.thumbnail_path)
+    
+    # Delete preview if exists
+    if file.preview_path and os.path.exists(file.preview_path):
+        os.remove(file.preview_path)
     
     # Update user storage
     current_user.storage_used -= file.size
@@ -664,14 +683,22 @@ async def preview_file(
     if not file.storage_path or not os.path.exists(file.storage_path):
         raise HTTPException(status_code=404, detail="File not found on disk")
 
+    # For images, use preview-optimized version if available (~1080p WebP, much faster)
+    serve_path = file.storage_path
+    if file.type == "image" and file.preview_path and os.path.exists(file.preview_path):
+        serve_path = file.preview_path
+        # Update media type for WebP previews
+        media_type = "image/webp"
+    else:
+        media_type = file.mime_type or mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+
     # Path traversal protection
-    resolved = os.path.realpath(file.storage_path)
+    resolved = os.path.realpath(serve_path)
     if not resolved.startswith(os.path.realpath(settings.storage_path)):
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Get file size
-    file_size = os.path.getsize(file.storage_path)
-    media_type = file.mime_type or mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+    file_size = os.path.getsize(serve_path)
 
     # Parse Range header for partial content (required for video seeking)
     range_header = request.headers.get("range")
@@ -691,7 +718,7 @@ async def preview_file(
         content_length = end - start + 1
 
         def iter_range():
-            with open(file.storage_path, "rb") as f:
+            with open(serve_path, "rb") as f:
                 f.seek(start)
                 remaining = content_length
                 while remaining > 0:
@@ -717,7 +744,7 @@ async def preview_file(
 
     # No Range header — stream the full file in chunks (avoids loading into memory)
     def iter_file():
-        with open(file.storage_path, "rb") as f:
+        with open(serve_path, "rb") as f:
             while True:
                 chunk = f.read(65536)  # 64KB chunks
                 if not chunk:

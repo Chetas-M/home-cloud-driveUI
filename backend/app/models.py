@@ -49,6 +49,7 @@ class File(Base):
     # Search & thumbnails
     content_index = Column(Text, nullable=True)  # extracted text for full-text search
     thumbnail_path = Column(String(500), nullable=True)  # path to generated thumbnail
+    preview_path = Column(String(500), nullable=True)  # path to preview-optimized image (~1080p WebP)
     
     # Ownership
     owner_id = Column(String(36), ForeignKey("users.id"), nullable=False)
