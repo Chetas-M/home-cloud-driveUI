@@ -59,8 +59,8 @@ class Settings(BaseSettings):
         """Parse CORS origins from comma-separated string"""
         return [origin.strip() for origin in self.cors_origins_str.split(',') if origin.strip()]
 
-    # Registration control - set to false to disable new user registration
-    allow_registration: bool = True
+    # Registration control - default OFF for secure-by-default; enable explicitly via env
+    allow_registration: bool = False
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
