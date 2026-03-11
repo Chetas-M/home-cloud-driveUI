@@ -214,6 +214,11 @@ async def download_shared_file(
     if not file.storage_path or not os.path.exists(file.storage_path):
         raise HTTPException(status_code=404, detail="File not found on disk")
 
+    # Path traversal protection
+    resolved = os.path.realpath(file.storage_path)
+    if not resolved.startswith(os.path.realpath(settings.storage_path)):
+        raise HTTPException(status_code=403, detail="Access denied")
+
     # Increment download count atomically (SQL-level to prevent race conditions)
     await db.execute(
         update(ShareLink)
