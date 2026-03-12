@@ -41,6 +41,15 @@ class TokenData(BaseModel):
     user_id: Optional[str] = None
 
 
+class PasswordChange(BaseModel):
+    current_password: str
+    new_password: str = Field(..., min_length=6)
+
+
+class AdminPasswordReset(BaseModel):
+    new_password: str = Field(..., min_length=6)
+
+
 # ============ FILE SCHEMAS ============
 
 class FileBase(BaseModel):

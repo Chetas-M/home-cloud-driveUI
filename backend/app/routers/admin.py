@@ -11,7 +11,7 @@ from sqlalchemy import select, func, delete
 
 from app.database import get_db
 from app.models import User, File as FileModel, ActivityLog
-from app.schemas import AdminUserResponse, AdminUserUpdate, SystemStats
+from app.schemas import AdminUserResponse, AdminUserUpdate, SystemStats, AdminPasswordReset
 from app.auth import get_admin_user, get_password_hash
 from app.config import get_settings
 
@@ -165,6 +165,31 @@ async def delete_user(
     # Delete user (cascades to files via relationship)
     await db.delete(user)
     await db.flush()
+
+
+@router.post("/users/{user_id}/reset-password", status_code=status.HTTP_200_OK)
+async def reset_user_password(
+    user_id: str,
+    data: AdminPasswordReset,
+    admin: User = Depends(get_admin_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Admin-only: force-reset a user's password"""
+    if user_id == admin.id:
+        raise HTTPException(
+            status_code=400,
+            detail="Use /api/auth/password to change your own password"
+        )
+
+    result = await db.execute(select(User).where(User.id == user_id))
+    user = result.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    user.password_hash = get_password_hash(data.new_password)
+    await db.flush()
+
+    return {"detail": f"Password reset for user '{user.username}'"}
 
 
 @router.get("/stats", response_model=SystemStats)

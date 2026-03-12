@@ -10,7 +10,7 @@ from slowapi.util import get_remote_address
 
 from app.database import get_db
 from app.models import User
-from app.schemas import UserCreate, UserResponse, UserLogin, Token
+from app.schemas import UserCreate, UserResponse, UserLogin, Token, PasswordChange
 from app.auth import (
     get_password_hash,
     create_access_token,
@@ -94,4 +94,35 @@ async def login(request: Request, form_data: OAuth2PasswordRequestForm = Depends
 async def get_me(current_user: User = Depends(get_current_user)):
     """Get current user info"""
     return current_user
+
+
+@router.patch("/password", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
+async def change_password(
+    request: Request,
+    data: PasswordChange,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Change the current user's password"""
+    from app.auth import verify_password
+
+    # Verify current password
+    if not verify_password(data.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+
+    # Prevent reusing the same password
+    if data.current_password == data.new_password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be different from current password"
+        )
+
+    current_user.password_hash = get_password_hash(data.new_password)
+    await db.flush()
+
+    return {"detail": "Password changed successfully"}
 

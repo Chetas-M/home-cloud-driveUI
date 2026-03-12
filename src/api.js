@@ -115,6 +115,13 @@ class ApiService {
         this.setToken(null);
     }
 
+    async changePassword(currentPassword, newPassword) {
+        return this.request('/auth/password', {
+            method: 'PATCH',
+            body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+        });
+    }
+
     // ============ FILES ============
     async listFiles(path = [], options = {}) {
         const params = new URLSearchParams();
@@ -316,6 +323,13 @@ class ApiService {
 
     async getSystemStats() {
         return this.request('/admin/stats');
+    }
+
+    async resetUserPassword(userId, newPassword) {
+        return this.request(`/admin/users/${userId}/reset-password`, {
+            method: 'POST',
+            body: JSON.stringify({ new_password: newPassword }),
+        });
     }
 
     // ============ SHARING ============
