@@ -24,7 +24,7 @@ def parse_path(path_json: str) -> List[str]:
 
 
 def serialize_path(path: List[str]) -> str:
-    return json.dumps(path)
+    return json.dumps(path, separators=(",", ":"))
 
 
 @router.post("", response_model=FileResponseSchema, status_code=status.HTTP_201_CREATED)

@@ -60,7 +60,12 @@ def parse_path(path_json: str) -> List[str]:
 
 def serialize_path(path: List[str]) -> str:
     """Serialize path list to JSON"""
-    return json.dumps(path)
+    return json.dumps(path, separators=(",", ":"))
+
+
+def normalize_path(path_json: str) -> str:
+    """Normalize incoming path JSON for stable DB comparisons."""
+    return serialize_path(parse_path(path_json or "[]"))
 
 
 @router.get("", response_model=List[FileResponseSchema])
@@ -81,7 +86,9 @@ async def list_files(
         query = query.where(FileModel.is_starred == True)
     
     if path:
-        query = query.where(FileModel.path == path)
+        normalized_path = normalize_path(path)
+        legacy_path = json.dumps(parse_path(path))
+        query = query.where(FileModel.path.in_([normalized_path, legacy_path]))
     
     result = await db.execute(query.order_by(FileModel.type, FileModel.name))
     files = result.scalars().all()
@@ -137,6 +144,7 @@ async def upload_files(
                     if not chunk:
                         break
                     file_size += len(chunk)
+                    await f.write(chunk)
                     
                     # Per-file size limit check
                     if settings.max_file_size_bytes > 0 and file_size > settings.max_file_size_bytes:
@@ -178,7 +186,7 @@ async def upload_files(
             type=get_file_type(file.filename, mime_type),
             mime_type=mime_type,
             size=file_size,
-            path=path,
+            path=normalize_path(path),
             storage_path=storage_filepath,
             thumbnail_path=thumb_path,
             owner_id=current_user.id,
@@ -472,7 +480,7 @@ async def trash_file(
     # If folder, recursively trash all children
     if file.type == "folder":
         folder_path = parse_path(file.path) + [file.name]
-        folder_path_json = json.dumps(folder_path)
+        folder_path_json = serialize_path(folder_path)
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
@@ -534,7 +542,7 @@ async def restore_file(
     # If folder, recursively restore all children
     if file.type == "folder":
         folder_path = parse_path(file.path) + [file.name]
-        folder_path_json = json.dumps(folder_path)
+        folder_path_json = serialize_path(folder_path)
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
@@ -592,7 +600,7 @@ async def delete_file_permanently(
     # If folder, recursively delete all children first
     if file.type == "folder":
         folder_path = parse_path(file.path) + [file.name]
-        folder_path_json = json.dumps(folder_path)
+        folder_path_json = serialize_path(folder_path)
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
