@@ -4,6 +4,8 @@ import {
     Grid,
     List,
     Upload,
+    FolderUp,
+    FolderPlus,
     Home,
     ChevronRight,
     ChevronDown,
@@ -29,6 +31,8 @@ export default function Header({
     view,
     onViewChange,
     onUpload,
+    onUploadFolder,
+    onNewFolder,
     onNavigateToPath,
     sortBy,
     onSortChange,
@@ -182,6 +186,29 @@ export default function Header({
                             <List size={18} />
                         </button>
                     </div>
+                )}
+
+                {/* New Folder button - only on file views */}
+                {showFileControls && onNewFolder && (
+                    <button className="header-btn" onClick={onNewFolder} title="New Folder">
+                        <FolderPlus size={18} />
+                    </button>
+                )}
+
+                {/* Upload Folder button - only on file views */}
+                {showFileControls && (
+                    <label className="upload-btn upload-folder-btn" title="Upload Folder">
+                        <FolderUp size={18} />
+                        <span>Folder</span>
+                        <input
+                            type="file"
+                            hidden
+                            webkitdirectory=""
+                            directory=""
+                            multiple
+                            onChange={(e) => onUploadFolder(e.target.files)}
+                        />
+                    </label>
                 )}
 
                 {/* Upload button - only on file views */}
