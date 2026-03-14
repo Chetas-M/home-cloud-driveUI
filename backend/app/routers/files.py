@@ -6,6 +6,8 @@ import json
 import uuid
 import aiofiles
 import mimetypes
+import unicodedata
+from urllib.parse import quote
 from typing import List, Optional
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Request
@@ -24,6 +26,36 @@ settings = get_settings()
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB chunks for streaming uploads
+
+
+def sanitize_filename(filename: Optional[str]) -> str:
+    """Normalize uploaded filenames before storing or reflecting them."""
+    if not filename:
+        return "unnamed"
+
+    sanitized_chars = []
+    for char in filename.replace("\x00", ""):
+        if char in {"/", "\\", "\r", "\n"}:
+            sanitized_chars.append("_")
+            continue
+
+        # Remove control/format characters such as bidi overrides.
+        if unicodedata.category(char).startswith("C"):
+            continue
+
+        sanitized_chars.append(char)
+
+    sanitized = "".join(sanitized_chars).strip().strip(".")
+    return sanitized or "unnamed"
+
+
+def build_content_disposition(disposition: str, filename: str) -> str:
+    """Create a safe Content-Disposition header value."""
+    safe_name = sanitize_filename(filename)
+    ascii_name = safe_name.encode("ascii", "ignore").decode("ascii") or "file"
+    ascii_name = ascii_name.replace('"', "_")
+    encoded_name = quote(safe_name, safe="")
+    return f"{disposition}; filename=\"{ascii_name}\"; filename*=UTF-8''{encoded_name}"
 
 
 def get_file_type(filename: str, mime_type: str = None) -> str:
@@ -129,9 +161,11 @@ async def upload_files(
     uploaded_files = []
     
     for file in files:
+        safe_filename = sanitize_filename(file.filename)
+
         # Generate unique filename
         file_id = str(uuid.uuid4())
-        ext = file.filename.split('.')[-1] if '.' in file.filename else ''
+        ext = safe_filename.split('.')[-1] if '.' in safe_filename else ''
         storage_filename = f"{file_id}.{ext}" if ext else file_id
         storage_filepath = os.path.join(user_storage_path, storage_filename)
         
@@ -152,7 +186,7 @@ async def upload_files(
                         os.remove(storage_filepath)
                         raise HTTPException(
                             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                            detail=f"File '{file.filename}' exceeds max size of {settings.max_file_size_bytes} bytes"
+                            detail=f"File '{safe_filename}' exceeds max size of {settings.max_file_size_bytes} bytes"
                         )
         except HTTPException:
             raise
@@ -170,11 +204,11 @@ async def upload_files(
             )
         
         # Get mime type
-        mime_type = file.content_type or mimetypes.guess_type(file.filename)[0]
+        mime_type = file.content_type or mimetypes.guess_type(safe_filename)[0]
         
         # Generate thumbnail for images
         thumb_path = None
-        if can_generate_thumbnail(file.filename):
+        if can_generate_thumbnail(safe_filename):
             thumb_dir = os.path.join(user_storage_path, "thumbnails")
             thumb_path = generate_thumbnail(storage_filepath, thumb_dir, file_id)
         
@@ -182,8 +216,8 @@ async def upload_files(
         now = datetime.now(timezone.utc)
         new_file = FileModel(
             id=file_id,
-            name=file.filename,
-            type=get_file_type(file.filename, mime_type),
+            name=safe_filename,
+            type=get_file_type(safe_filename, mime_type),
             mime_type=mime_type,
             size=file_size,
             path=normalize_path(path),
@@ -205,7 +239,7 @@ async def upload_files(
         activity = ActivityLog(
             user_id=current_user.id,
             action="upload",
-            file_name=file.filename,
+            file_name=safe_filename,
         )
         db.add(activity)
         
@@ -280,7 +314,7 @@ async def download_file(
         media_type=file.mime_type or "application/octet-stream",
         headers={
             "Content-Length": str(file_size),
-            "Content-Disposition": f'attachment; filename="{file.name}"',
+            "Content-Disposition": build_content_disposition("attachment", file.name),
         }
     )
 
@@ -712,7 +746,7 @@ async def preview_file(
                 "Content-Range": f"bytes {start}-{end}/{file_size}",
                 "Content-Length": str(content_length),
                 "Accept-Ranges": "bytes",
-                "Content-Disposition": f'inline; filename="{file.name}"',
+                "Content-Disposition": build_content_disposition("inline", file.name),
                 "Cache-Control": "private, max-age=3600",
             }
         )
@@ -732,7 +766,7 @@ async def preview_file(
         headers={
             "Content-Length": str(file_size),
             "Accept-Ranges": "bytes",
-            "Content-Disposition": f'inline; filename="{file.name}"',
+            "Content-Disposition": build_content_disposition("inline", file.name),
             "Cache-Control": "private, max-age=3600",
         }
     )

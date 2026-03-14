@@ -16,6 +16,7 @@ from app.models import User, File as FileModel, ShareLink, ActivityLog
 from app.schemas import ShareLinkCreate, ShareLinkResponse
 from app.auth import get_current_user, get_password_hash, verify_password
 from app.config import get_settings
+from app.routers.files import build_content_disposition
 
 settings = get_settings()
 router = APIRouter(prefix="/api/share", tags=["Sharing"])
@@ -229,8 +230,10 @@ async def download_shared_file(
 
     return FileResponse(
         path=file.storage_path,
-        filename=file.name,
-        media_type=file.mime_type or "application/octet-stream"
+        media_type=file.mime_type or "application/octet-stream",
+        headers={
+            "Content-Disposition": build_content_disposition("attachment", file.name)
+        }
     )
 
 
