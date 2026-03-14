@@ -13,7 +13,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_
 
 from app.database import get_db
 from app.limiter import limiter
@@ -96,6 +96,21 @@ def serialize_path(path: List[str]) -> str:
     return json.dumps(path, separators=(",", ":"))
 
 
+def serialize_path_legacy(path: List[str]) -> str:
+    """Legacy JSON serialization used by older DB rows."""
+    return json.dumps(path)
+
+
+def get_serialized_path_variants(path: List[str]) -> List[str]:
+    """Return all known serialized forms for the same logical path."""
+    return list({serialize_path(path), serialize_path_legacy(path)})
+
+
+def get_serialized_path_prefixes(path: List[str]) -> List[str]:
+    """Return LIKE prefixes for all known serialized path forms."""
+    return [f"{variant[:-1]}%" for variant in get_serialized_path_variants(path)]
+
+
 def normalize_path(path_json: str) -> str:
     """Normalize incoming path JSON for stable DB comparisons."""
     return serialize_path(parse_path(path_json or "[]"))
@@ -119,9 +134,9 @@ async def list_files(
         query = query.where(FileModel.is_starred == True)
     
     if path:
-        normalized_path = normalize_path(path)
-        legacy_path = json.dumps(parse_path(path))
-        query = query.where(FileModel.path.in_([normalized_path, legacy_path]))
+        query = query.where(
+            FileModel.path.in_(get_serialized_path_variants(parse_path(path)))
+        )
     
     result = await db.execute(query.order_by(FileModel.type, FileModel.name))
     files = result.scalars().all()
@@ -525,12 +540,12 @@ async def trash_file(
     # If folder, recursively trash all children
     if file.type == "folder":
         folder_path = parse_path(file.path) + [file.name]
-        folder_path_json = serialize_path(folder_path)
+        folder_path_prefixes = get_serialized_path_prefixes(folder_path)
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
                     FileModel.owner_id == current_user.id,
-                    FileModel.path.like(f'{folder_path_json[:-1]}%'),
+                    or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
                     FileModel.is_trashed == False,
                 )
             )
@@ -589,12 +604,12 @@ async def restore_file(
     # If folder, recursively restore all children
     if file.type == "folder":
         folder_path = parse_path(file.path) + [file.name]
-        folder_path_json = serialize_path(folder_path)
+        folder_path_prefixes = get_serialized_path_prefixes(folder_path)
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
                     FileModel.owner_id == current_user.id,
-                    FileModel.path.like(f'{folder_path_json[:-1]}%'),
+                    or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
                     FileModel.is_trashed == True,
                 )
             )
@@ -649,12 +664,12 @@ async def delete_file_permanently(
     # If folder, recursively delete all children first
     if file.type == "folder":
         folder_path = parse_path(file.path) + [file.name]
-        folder_path_json = serialize_path(folder_path)
+        folder_path_prefixes = get_serialized_path_prefixes(folder_path)
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
                     FileModel.owner_id == current_user.id,
-                    FileModel.path.like(f'{folder_path_json[:-1]}%'),
+                    or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
                 )
             )
         )

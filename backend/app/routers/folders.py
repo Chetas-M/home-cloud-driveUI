@@ -6,7 +6,7 @@ from typing import List
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, or_
 
 from app.database import get_db
 from app.models import User, File as FileModel, ActivityLog
@@ -27,6 +27,21 @@ def serialize_path(path: List[str]) -> str:
     return json.dumps(path, separators=(",", ":"))
 
 
+def serialize_path_legacy(path: List[str]) -> str:
+    """Legacy JSON serialization used by older DB rows."""
+    return json.dumps(path)
+
+
+def get_serialized_path_variants(path: List[str]) -> List[str]:
+    """Return all known serialized forms for the same logical path."""
+    return list({serialize_path(path), serialize_path_legacy(path)})
+
+
+def get_serialized_path_prefixes(path: List[str]) -> List[str]:
+    """Return LIKE prefixes for all known serialized path forms."""
+    return [f"{variant[:-1]}%" for variant in get_serialized_path_variants(path)]
+
+
 @router.post("", response_model=FileResponseSchema, status_code=status.HTTP_201_CREATED)
 async def create_folder(
     folder: FolderCreate,
@@ -40,7 +55,7 @@ async def create_folder(
             and_(
                 FileModel.owner_id == current_user.id,
                 FileModel.name == folder.name,
-                FileModel.path == serialize_path(folder.path),
+                FileModel.path.in_(get_serialized_path_variants(folder.path)),
                 FileModel.type == "folder",
                 FileModel.is_trashed == False,
             )
@@ -111,14 +126,14 @@ async def delete_folder(
     # Get folder path for finding children
     folder_path = parse_path(folder.path)
     folder_full_path = folder_path + [folder.name]
-    folder_full_path_json = serialize_path(folder_full_path)
+    folder_path_prefixes = get_serialized_path_prefixes(folder_full_path)
     
     # Get all files/folders inside this folder (and subfolders)
     children_result = await db.execute(
         select(FileModel).where(
             and_(
                 FileModel.owner_id == current_user.id,
-                FileModel.path.like(f'{folder_full_path_json[:-1]}%'),
+                or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
             )
         )
     )
