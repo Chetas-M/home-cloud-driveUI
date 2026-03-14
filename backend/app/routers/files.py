@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_
 
 from app.database import get_db
+from app.limiter import limiter
 from app.models import User, File as FileModel, ActivityLog
 from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest
 from app.auth import get_current_user
@@ -147,7 +148,9 @@ async def list_files(
 
 
 @router.post("/upload", response_model=List[FileResponseSchema], status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
 async def upload_files(
+    request: Request,
     files: List[UploadFile] = File(...),
     path: Optional[str] = Query("[]", description="Path as JSON array"),
     current_user: User = Depends(get_current_user),
@@ -263,7 +266,9 @@ async def upload_files(
 
 
 @router.get("/{file_id}/download")
+@limiter.limit("60/minute")
 async def download_file(
+    request: Request,
     file_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -320,7 +325,9 @@ async def download_file(
 
 
 @router.post("/{file_id}/copy", response_model=FileResponseSchema, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
 async def copy_file(
+    request: Request,
     file_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -425,7 +432,9 @@ async def copy_file(
 
 
 @router.patch("/{file_id}", response_model=FileResponseSchema)
+@limiter.limit("60/minute")
 async def update_file(
+    request: Request,
     file_id: str,
     update: FileUpdate,
     current_user: User = Depends(get_current_user),
@@ -490,7 +499,9 @@ async def update_file(
 
 
 @router.post("/{file_id}/trash", response_model=FileResponseSchema)
+@limiter.limit("30/minute")
 async def trash_file(
+    request: Request,
     file_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -553,7 +564,9 @@ async def trash_file(
 
 
 @router.post("/{file_id}/restore", response_model=FileResponseSchema)
+@limiter.limit("30/minute")
 async def restore_file(
+    request: Request,
     file_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -615,7 +628,9 @@ async def restore_file(
 
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("20/minute")
 async def delete_file_permanently(
+    request: Request,
     file_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -676,6 +691,7 @@ PREVIEWABLE_TYPES = {"image", "video", "pdf", "text"}
 
 
 @router.get("/{file_id}/preview", response_model=None)
+@limiter.limit("120/minute")
 async def preview_file(
     request: Request,
     file_id: str,
@@ -773,7 +789,9 @@ async def preview_file(
 
 
 @router.get("/{file_id}/thumbnail", response_model=None)
+@limiter.limit("120/minute")
 async def get_thumbnail(
+    request: Request,
     file_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)

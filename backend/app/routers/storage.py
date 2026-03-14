@@ -2,11 +2,12 @@
 Home Cloud Drive - Storage Router
 """
 from typing import List
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
 from app.database import get_db
+from app.limiter import limiter
 from app.models import User, File as FileModel, ActivityLog
 from app.schemas import StorageResponse, StorageBreakdown, ActivityResponse
 from app.auth import get_current_user
@@ -16,7 +17,9 @@ router = APIRouter(prefix="/api/storage", tags=["Storage"])
 
 
 @router.get("", response_model=StorageResponse)
+@limiter.limit("60/minute")
 async def get_storage_info(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -69,7 +72,9 @@ async def get_storage_info(
 
 
 @router.get("/activity", response_model=List[ActivityResponse])
+@limiter.limit("60/minute")
 async def get_activity_log(
+    request: Request,
     limit: int = 50,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -91,7 +96,9 @@ async def get_activity_log(
 
 
 @router.delete("/trash", status_code=204)
+@limiter.limit("10/minute")
 async def empty_trash(
+    request: Request,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):

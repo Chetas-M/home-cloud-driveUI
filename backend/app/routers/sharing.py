@@ -5,13 +5,14 @@ Provides endpoints for creating and accessing shared file links.
 import os
 from datetime import datetime, timedelta, timezone
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Header
+from fastapi import APIRouter, Depends, HTTPException, status, Query, Header, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, update
 from pydantic import BaseModel
 
 from app.database import get_db
+from app.limiter import limiter
 from app.models import User, File as FileModel, ShareLink, ActivityLog
 from app.schemas import ShareLinkCreate, ShareLinkResponse
 from app.auth import get_current_user, get_password_hash, verify_password
@@ -27,7 +28,9 @@ class ShareAccessRequest(BaseModel):
 
 
 @router.post("", response_model=ShareLinkResponse, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
 async def create_share_link(
+    request: Request,
     data: ShareLinkCreate,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
@@ -126,7 +129,9 @@ async def get_my_share_links(
 
 
 @router.post("/{token}")
+@limiter.limit("60/minute")
 async def access_shared_file(
+    request: Request,
     token: str,
     body: Optional[ShareAccessRequest] = None,
     db: AsyncSession = Depends(get_db)
@@ -179,7 +184,9 @@ async def access_shared_file(
 
 
 @router.get("/{token}/download")
+@limiter.limit("60/minute")
 async def download_shared_file(
+    request: Request,
     token: str,
     x_share_password: Optional[str] = Header(None),
     db: AsyncSession = Depends(get_db)
@@ -238,7 +245,9 @@ async def download_shared_file(
 
 
 @router.delete("/{link_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
 async def revoke_share_link(
+    request: Request,
     link_id: str,
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)

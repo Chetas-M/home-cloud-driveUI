@@ -5,10 +5,8 @@ from datetime import timedelta
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.ext.asyncio import AsyncSession
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-
 from app.database import get_db
+from app.limiter import limiter
 from app.models import User
 from app.schemas import UserCreate, UserResponse, UserLogin, Token, PasswordChange
 from app.auth import (
@@ -23,10 +21,6 @@ from app.config import get_settings
 
 settings = get_settings()
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
-
-# Rate limiter — uses client IP (X-Forwarded-For from nginx)
-limiter = Limiter(key_func=get_remote_address)
-
 
 @router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("10/minute")

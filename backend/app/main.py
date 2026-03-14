@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
 from app.database import init_db, engine
+from app.limiter import limiter
 from app.routers import auth, files, folders, storage
 
 settings = get_settings()
@@ -137,9 +138,10 @@ app.add_middleware(
 # Rate limiting
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
-from app.routers.auth import limiter
+from slowapi.middleware import SlowAPIMiddleware
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+app.add_middleware(SlowAPIMiddleware)
 
 # Import additional routers
 from app.routers import admin, sharing

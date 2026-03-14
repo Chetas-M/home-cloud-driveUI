@@ -5,11 +5,12 @@ Provides admin-only endpoints for user and system management.
 import os
 import shutil
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 
 from app.database import get_db
+from app.limiter import limiter
 from app.models import User, File as FileModel, ActivityLog
 from app.schemas import AdminUserResponse, AdminUserUpdate, SystemStats, AdminPasswordReset
 from app.auth import get_admin_user, get_password_hash
@@ -20,7 +21,9 @@ router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 
 @router.get("/users", response_model=List[AdminUserResponse])
+@limiter.limit("60/minute")
 async def list_users(
+    request: Request,
     admin: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db)
 ):
@@ -53,7 +56,9 @@ async def list_users(
 
 
 @router.get("/users/{user_id}", response_model=AdminUserResponse)
+@limiter.limit("60/minute")
 async def get_user(
+    request: Request,
     user_id: str,
     admin: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db)
@@ -86,7 +91,9 @@ async def get_user(
 
 
 @router.patch("/users/{user_id}", response_model=AdminUserResponse)
+@limiter.limit("20/minute")
 async def update_user(
+    request: Request,
     user_id: str,
     update: AdminUserUpdate,
     admin: User = Depends(get_admin_user),
@@ -138,7 +145,9 @@ async def update_user(
 
 
 @router.delete("/users/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("10/minute")
 async def delete_user(
+    request: Request,
     user_id: str,
     admin: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db)
@@ -168,7 +177,9 @@ async def delete_user(
 
 
 @router.post("/users/{user_id}/reset-password", status_code=status.HTTP_200_OK)
+@limiter.limit("10/minute")
 async def reset_user_password(
+    request: Request,
     user_id: str,
     data: AdminPasswordReset,
     admin: User = Depends(get_admin_user),
@@ -193,7 +204,9 @@ async def reset_user_password(
 
 
 @router.get("/stats", response_model=SystemStats)
+@limiter.limit("60/minute")
 async def get_system_stats(
+    request: Request,
     admin: User = Depends(get_admin_user),
     db: AsyncSession = Depends(get_db)
 ):
