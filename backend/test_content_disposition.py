@@ -1,10 +1,6 @@
 import unittest
-from pathlib import Path
-import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from app.routers.files import build_content_disposition
+from backend.app.routers.files import build_content_disposition
 
 
 class ContentDispositionTests(unittest.TestCase):
