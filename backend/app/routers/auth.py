@@ -30,9 +30,15 @@ from app.auth import (
 )
 from app.config import get_settings
 from app.email import send_password_reset_email
+from anyio import to_thread
 
 settings = get_settings()
 router = APIRouter(prefix="/api/auth", tags=["Authentication"])
+
+
+async def send_password_reset_email_async(email: str, username: str, reset_url: str) -> None:
+    """Run the blocking password reset email sender in a thread pool."""
+    await to_thread.run_sync(send_password_reset_email, email, username, reset_url)
 
 
 def build_password_reset_url(request: Request, token: str) -> str:
@@ -164,7 +170,7 @@ async def forgot_password(
         token = create_password_reset_token(user.id)
         reset_url = build_password_reset_url(request, token)
         background_tasks.add_task(
-            send_password_reset_email,
+            send_password_reset_email_async,
             user.email,
             user.username,
             reset_url,
