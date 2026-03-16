@@ -71,11 +71,14 @@ export default function AuthPage({ onLogin }) {
             setAuthMode('reset');
             setError('');
             setMessage('Choose a new password for your account.');
+            clearUrlResetToken();
         }
     }, []);
 
     const clearUrlResetToken = () => {
-        window.history.replaceState({}, document.title, window.location.pathname);
+        const url = new URL(window.location.href);
+        url.searchParams.delete('reset_token');
+        window.history.replaceState({}, document.title, url.toString());
     };
 
     const resetToLogin = () => {
