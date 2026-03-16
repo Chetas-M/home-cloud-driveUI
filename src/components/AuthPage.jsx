@@ -1,19 +1,26 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Eye, EyeOff, AlertCircle, User, Lock } from 'lucide-react';
+import { Eye, EyeOff, AlertCircle, User, Lock, Mail } from 'lucide-react';
 import api from '../api';
 
 export default function AuthPage({ onLogin }) {
-    const [isLogin, setIsLogin] = useState(true);
+    const [authMode, setAuthMode] = useState('login');
     const [email, setEmail] = useState('');
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
+    const [confirmPassword, setConfirmPassword] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
+    const [message, setMessage] = useState('');
     const [loading, setLoading] = useState(false);
+    const [resetToken, setResetToken] = useState('');
     const starsRef = useRef(null);
     const windsRef = useRef(null);
 
-    // Generate twinkling stars dynamically
+    const isLogin = authMode === 'login';
+    const isRegister = authMode === 'register';
+    const isForgotPassword = authMode === 'forgot';
+    const isResetPassword = authMode === 'reset';
+
     useEffect(() => {
         const container = starsRef.current;
         if (!container) return;
@@ -35,7 +42,6 @@ export default function AuthPage({ onLogin }) {
         }
     }, []);
 
-    // Generate wind streaks dynamically
     useEffect(() => {
         const container = windsRef.current;
         if (!container) return;
@@ -57,20 +63,74 @@ export default function AuthPage({ onLogin }) {
         });
     }, []);
 
+    useEffect(() => {
+        const searchParams = new URLSearchParams(window.location.search);
+        const token = searchParams.get('reset_token');
+        if (token) {
+            setResetToken(token);
+            setAuthMode('reset');
+            setError('');
+            setMessage('Choose a new password for your account.');
+        }
+    }, []);
+
+    const clearUrlResetToken = () => {
+        window.history.replaceState({}, document.title, window.location.pathname);
+    };
+
+    const resetToLogin = () => {
+        setAuthMode('login');
+        setUsername('');
+        setPassword('');
+        setConfirmPassword('');
+        setResetToken('');
+        setShowPassword(false);
+        setError('');
+    };
+
+    const handleModeChange = (mode) => {
+        setAuthMode(mode);
+        setError('');
+        setMessage('');
+        setPassword('');
+        setConfirmPassword('');
+        setShowPassword(false);
+        if (mode !== 'reset') {
+            setResetToken('');
+            clearUrlResetToken();
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         setError('');
+        setMessage('');
         setLoading(true);
 
         try {
             if (isLogin) {
                 await api.login(email, password);
-            } else {
+                const user = await api.getMe();
+                onLogin(user);
+            } else if (isRegister) {
                 await api.register(email, username, password);
                 await api.login(email, password);
+                const user = await api.getMe();
+                onLogin(user);
+            } else if (isForgotPassword) {
+                const response = await api.requestPasswordReset(email);
+                setMessage(response.detail || 'If an account exists for that email, a reset link has been sent.');
+            } else if (isResetPassword) {
+                if (password !== confirmPassword) {
+                    throw new Error('Passwords do not match');
+                }
+                const response = await api.resetPassword(resetToken, password);
+                setMessage(response.detail || 'Password reset successfully. You can now sign in.');
+                setPassword('');
+                setConfirmPassword('');
+                clearUrlResetToken();
+                resetToLogin();
             }
-            const user = await api.getMe();
-            onLogin(user);
         } catch (err) {
             setError(err.message || 'An error occurred');
         } finally {
@@ -78,27 +138,117 @@ export default function AuthPage({ onLogin }) {
         }
     };
 
+    const submitLabel = loading
+        ? 'Please wait...'
+        : isLogin
+            ? 'Login'
+            : isRegister
+                ? 'Create Account'
+                : isForgotPassword
+                    ? 'Send Reset Link'
+                    : 'Update Password';
+
+    const emailField = !isResetPassword && (
+        <div className="sky-login__field">
+            <div className="sky-login__cloud sky-login__cloud--1">
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--left" />
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--right" />
+            </div>
+            <div className="sky-login__string" />
+            <div className="sky-login__glass-input">
+                <input
+                    type="email"
+                    placeholder="Email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                />
+            </div>
+        </div>
+    );
+
+    const usernameField = isRegister && (
+        <div className="sky-login__field">
+            <div className="sky-login__cloud sky-login__cloud--3">
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--left-sm" />
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--right-xs" />
+            </div>
+            <div className="sky-login__string" />
+            <div className="sky-login__glass-input">
+                <input
+                    type="text"
+                    placeholder="Choose a username"
+                    value={username}
+                    onChange={(e) => setUsername(e.target.value)}
+                    minLength={3}
+                    required
+                />
+            </div>
+        </div>
+    );
+
+    const passwordField = !isForgotPassword && (
+        <div className="sky-login__field">
+            <div className="sky-login__cloud sky-login__cloud--2">
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--left-lg" />
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--right-md" />
+            </div>
+            <div className="sky-login__string" />
+            <div className="sky-login__glass-input sky-login__glass-input--password">
+                <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder={isResetPassword ? 'New Password' : 'Password'}
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    minLength={6}
+                    required
+                />
+                <button
+                    type="button"
+                    className="sky-login__eye-toggle"
+                    onClick={() => setShowPassword(!showPassword)}
+                >
+                    {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                </button>
+            </div>
+        </div>
+    );
+
+    const confirmPasswordField = isResetPassword && (
+        <div className="sky-login__field">
+            <div className="sky-login__cloud sky-login__cloud--3">
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--left-sm" />
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--right-xs" />
+            </div>
+            <div className="sky-login__string" />
+            <div className="sky-login__glass-input sky-login__glass-input--password">
+                <input
+                    type={showPassword ? 'text' : 'password'}
+                    placeholder="Confirm New Password"
+                    value={confirmPassword}
+                    onChange={(e) => setConfirmPassword(e.target.value)}
+                    minLength={6}
+                    required
+                />
+            </div>
+        </div>
+    );
+
     return (
         <main className="sky-login">
-            {/* Dynamic stars */}
             <div className="sky-stars" ref={starsRef} />
-
-            {/* Dynamic wind streaks */}
             <div className="sky-winds" ref={windsRef} />
 
-            {/* Background clouds */}
             <div className="sky-login__bg">
                 <div className="sky-login__cloud-bg sky-login__cloud-bg--1" />
                 <div className="sky-login__cloud-bg sky-login__cloud-bg--2" />
             </div>
 
-            {/* Header */}
             <header className="sky-login__header">
                 <h1 className="sky-login__title">Home Cloud</h1>
                 <p className="sky-login__subtitle sky-login__subtitle--desktop">Your files, floating gracefully.</p>
             </header>
 
-            {/* Error message */}
             {error && (
                 <div className="sky-login__error">
                     <AlertCircle size={16} />
@@ -106,69 +256,17 @@ export default function AuthPage({ onLogin }) {
                 </div>
             )}
 
-            {/* ======= DESKTOP LAYOUT: 3 clouds side-by-side ======= */}
+            {message && (
+                <div className="sky-login__notice">
+                    <span>{message}</span>
+                </div>
+            )}
+
             <form onSubmit={handleSubmit} className="sky-login__form sky-login__form--desktop">
-                <div className="sky-login__field">
-                    <div className="sky-login__cloud sky-login__cloud--1">
-                        <div className="sky-login__cloud-bump sky-login__cloud-bump--left" />
-                        <div className="sky-login__cloud-bump sky-login__cloud-bump--right" />
-                    </div>
-                    <div className="sky-login__string" />
-                    <div className="sky-login__glass-input">
-                        <input
-                            type="email"
-                            placeholder="Username or Email"
-                            value={email}
-                            onChange={(e) => setEmail(e.target.value)}
-                            required
-                        />
-                    </div>
-                </div>
-
-                {!isLogin && (
-                    <div className="sky-login__field">
-                        <div className="sky-login__cloud sky-login__cloud--3">
-                            <div className="sky-login__cloud-bump sky-login__cloud-bump--left-sm" />
-                            <div className="sky-login__cloud-bump sky-login__cloud-bump--right-xs" />
-                        </div>
-                        <div className="sky-login__string" />
-                        <div className="sky-login__glass-input">
-                            <input
-                                type="text"
-                                placeholder="Choose a username"
-                                value={username}
-                                onChange={(e) => setUsername(e.target.value)}
-                                minLength={3}
-                                required
-                            />
-                        </div>
-                    </div>
-                )}
-
-                <div className="sky-login__field">
-                    <div className="sky-login__cloud sky-login__cloud--2">
-                        <div className="sky-login__cloud-bump sky-login__cloud-bump--left-lg" />
-                        <div className="sky-login__cloud-bump sky-login__cloud-bump--right-md" />
-                    </div>
-                    <div className="sky-login__string" />
-                    <div className="sky-login__glass-input sky-login__glass-input--password">
-                        <input
-                            type={showPassword ? 'text' : 'password'}
-                            placeholder="Password"
-                            value={password}
-                            onChange={(e) => setPassword(e.target.value)}
-                            minLength={6}
-                            required
-                        />
-                        <button
-                            type="button"
-                            className="sky-login__eye-toggle"
-                            onClick={() => setShowPassword(!showPassword)}
-                        >
-                            {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                        </button>
-                    </div>
-                </div>
+                {emailField}
+                {usernameField}
+                {passwordField}
+                {confirmPasswordField}
 
                 <div className="sky-login__field">
                     <div className="sky-login__cloud sky-login__cloud--3">
@@ -177,15 +275,13 @@ export default function AuthPage({ onLogin }) {
                     </div>
                     <div className="sky-login__string" />
                     <button type="submit" className="sky-login__submit" disabled={loading}>
-                        {loading ? 'Please wait...' : (isLogin ? 'Login' : 'Create Account')}
+                        {submitLabel}
                     </button>
                 </div>
             </form>
 
-            {/* ======= MOBILE LAYOUT: single cloud with vertical rig ======= */}
             <form onSubmit={handleSubmit} className="sky-login__form sky-login__form--mobile">
                 <div className="sky-rig">
-                    {/* Single cloud */}
                     <div className="sky-rig__cloud">
                         <div className="sky-rig__cloud-bump sky-rig__cloud-bump--1" />
                         <div className="sky-rig__cloud-bump sky-rig__cloud-bump--2" />
@@ -193,25 +289,24 @@ export default function AuthPage({ onLogin }) {
                         <div className="sky-rig__cloud-body" />
                     </div>
 
-                    {/* Thread cloud → email */}
                     <div className="sky-rig__thread sky-rig__thread--long" />
 
-                    {/* Email field */}
-                    <div className="sky-rig__card">
-                        <div className="sky-rig__card-inner">
-                            <User size={18} className="sky-rig__icon" />
-                            <input
-                                type="email"
-                                placeholder="Username or Email"
-                                value={email}
-                                onChange={(e) => setEmail(e.target.value)}
-                                required
-                            />
+                    {!isResetPassword && (
+                        <div className="sky-rig__card">
+                            <div className="sky-rig__card-inner">
+                                {isForgotPassword ? <Mail size={18} className="sky-rig__icon" /> : <User size={18} className="sky-rig__icon" />}
+                                <input
+                                    type="email"
+                                    placeholder="Email"
+                                    value={email}
+                                    onChange={(e) => setEmail(e.target.value)}
+                                    required
+                                />
+                            </div>
                         </div>
-                    </div>
+                    )}
 
-                    {/* Thread email → username (register only) */}
-                    {!isLogin && (
+                    {isRegister && (
                         <>
                             <div className="sky-rig__thread sky-rig__thread--short" />
                             <div className="sky-rig__card">
@@ -230,49 +325,88 @@ export default function AuthPage({ onLogin }) {
                         </>
                     )}
 
-                    {/* Thread → password */}
-                    <div className="sky-rig__thread sky-rig__thread--short" />
+                    {!isForgotPassword && (
+                        <>
+                            <div className="sky-rig__thread sky-rig__thread--short" />
+                            <div className="sky-rig__card">
+                                <div className="sky-rig__card-inner">
+                                    <Lock size={18} className="sky-rig__icon" />
+                                    <input
+                                        type={showPassword ? 'text' : 'password'}
+                                        placeholder={isResetPassword ? 'New Password' : 'Password'}
+                                        value={password}
+                                        onChange={(e) => setPassword(e.target.value)}
+                                        minLength={6}
+                                        required
+                                    />
+                                    <button
+                                        type="button"
+                                        className="sky-login__eye-toggle"
+                                        onClick={() => setShowPassword(!showPassword)}
+                                    >
+                                        {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
+                                    </button>
+                                </div>
+                            </div>
+                        </>
+                    )}
 
-                    {/* Password field */}
-                    <div className="sky-rig__card">
-                        <div className="sky-rig__card-inner">
-                            <Lock size={18} className="sky-rig__icon" />
-                            <input
-                                type={showPassword ? 'text' : 'password'}
-                                placeholder="Password"
-                                value={password}
-                                onChange={(e) => setPassword(e.target.value)}
-                                minLength={6}
-                                required
-                            />
-                            <button
-                                type="button"
-                                className="sky-login__eye-toggle"
-                                onClick={() => setShowPassword(!showPassword)}
-                            >
-                                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
-                            </button>
-                        </div>
-                    </div>
+                    {isResetPassword && (
+                        <>
+                            <div className="sky-rig__thread sky-rig__thread--short" />
+                            <div className="sky-rig__card">
+                                <div className="sky-rig__card-inner">
+                                    <Lock size={18} className="sky-rig__icon" />
+                                    <input
+                                        type={showPassword ? 'text' : 'password'}
+                                        placeholder="Confirm New Password"
+                                        value={confirmPassword}
+                                        onChange={(e) => setConfirmPassword(e.target.value)}
+                                        minLength={6}
+                                        required
+                                    />
+                                </div>
+                            </div>
+                        </>
+                    )}
 
-                    {/* Login button */}
                     <div className="sky-rig__btn-wrap">
                         <button type="submit" className="sky-rig__btn" disabled={loading}>
-                            <span>{loading ? 'Please wait...' : (isLogin ? 'Login' : 'Create Account')}</span>
+                            <span>{submitLabel}</span>
                         </button>
                     </div>
                 </div>
             </form>
 
-            {/* Footer links */}
             <footer className="sky-login__footer">
-                <a href="#" onClick={(e) => e.preventDefault()}>Forgot Password?</a>
-                <button
-                    type="button"
-                    onClick={() => { setIsLogin(!isLogin); setError(''); }}
-                >
-                    {isLogin ? 'Create Account' : 'Sign In'}
-                </button>
+                {!isResetPassword && (
+                    <button
+                        type="button"
+                        onClick={() => handleModeChange(isForgotPassword ? 'login' : 'forgot')}
+                    >
+                        {isForgotPassword ? 'Back to Sign In' : 'Forgot Password?'}
+                    </button>
+                )}
+                {!isForgotPassword && !isResetPassword && (
+                    <button
+                        type="button"
+                        onClick={() => handleModeChange(isLogin ? 'register' : 'login')}
+                    >
+                        {isLogin ? 'Create Account' : 'Sign In'}
+                    </button>
+                )}
+                {isResetPassword && (
+                    <button
+                        type="button"
+                        onClick={() => {
+                            clearUrlResetToken();
+                            resetToLogin();
+                            setMessage('');
+                        }}
+                    >
+                        Sign In
+                    </button>
+                )}
                 <a href="#" onClick={(e) => e.preventDefault()}>Help</a>
             </footer>
         </main>

@@ -122,6 +122,22 @@ class ApiService {
         });
     }
 
+    async requestPasswordReset(email) {
+        return this.request('/auth/forgot-password', {
+            method: 'POST',
+            body: JSON.stringify({ email }),
+            skipAuth: true,
+        });
+    }
+
+    async resetPassword(token, newPassword) {
+        return this.request('/auth/reset-password', {
+            method: 'POST',
+            body: JSON.stringify({ token, new_password: newPassword }),
+            skipAuth: true,
+        });
+    }
+
     // ============ FILES ============
     async listFiles(path = [], options = {}) {
         const params = new URLSearchParams();
