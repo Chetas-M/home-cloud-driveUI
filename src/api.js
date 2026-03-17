@@ -243,9 +243,20 @@ class ApiService {
                                     const avgSpeed = speedSamples.length > 0
                                         ? speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length
                                         : 0;
-                                    const remaining = file.size - currentLoaded;
-                                    const eta = avgSpeed > 0 ? Math.ceil(remaining / avgSpeed) : 0;
-                                    const percent = Math.round((currentLoaded / file.size) * 100);
+                                    let remaining;
+                                    let eta;
+                                    let percent;
+
+                                    if (file.size > 0) {
+                                        remaining = file.size - currentLoaded;
+                                        eta = avgSpeed > 0 ? Math.ceil(remaining / avgSpeed) : 0;
+                                        percent = Math.round((currentLoaded / file.size) * 100);
+                                    } else {
+                                        // Handle 0-byte files explicitly to avoid NaN progress values
+                                        remaining = 0;
+                                        eta = 0;
+                                        percent = 100;
+                                    }
 
                                     onProgress?.({
                                         loaded: currentLoaded,
