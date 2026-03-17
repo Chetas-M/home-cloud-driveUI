@@ -394,16 +394,16 @@ async def complete_chunked_upload(
 
     assembled_size = 0
     try:
-        with open(final_storage_filepath, 'wb') as outfile:
+        async with aiofiles.open(final_storage_filepath, 'wb') as outfile:
             for chunk_filename in chunk_files:
                 chunk_path = os.path.join(temp_dir, chunk_filename)
-                with open(chunk_path, 'rb') as infile:
+                async with aiofiles.open(chunk_path, 'rb') as infile:
                     # Write in blocks
                     while True:
-                        data = infile.read(65536)
+                        data = await infile.read(65536)
                         if not data:
                             break
-                        outfile.write(data)
+                        await outfile.write(data)
                         assembled_size += len(data)
     except Exception:
         if os.path.exists(final_storage_filepath):
