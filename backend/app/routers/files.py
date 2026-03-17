@@ -420,8 +420,16 @@ async def complete_chunked_upload(
     if assembled_size != complete_req.total_size:
         os.remove(final_storage_filepath)
         raise HTTPException(
-            status_code=400, 
+            status_code=400,
             detail=f"Size mismatch: Expected {complete_req.total_size}, got {assembled_size}. File deleted."
+        )
+
+    # Enforce maximum allowed file size on the assembled file
+    if settings.max_file_size_bytes and assembled_size > settings.max_file_size_bytes:
+        os.remove(final_storage_filepath)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"File exceeds maximum allowed size of {settings.max_file_size_bytes} bytes."
         )
 
     # Re-check storage quota (just in case it changed during upload)
