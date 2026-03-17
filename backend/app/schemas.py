@@ -73,6 +73,25 @@ class FileCreate(BaseModel):
     path: List[str] = []
 
 
+class ChunkedUploadInitRequest(BaseModel):
+    filename: str
+    total_size: int
+    path: List[str] = []
+
+
+class ChunkedUploadInitResponse(BaseModel):
+    upload_id: str
+    chunk_size: int
+
+
+class ChunkedUploadCompleteRequest(BaseModel):
+    upload_id: str
+    filename: str
+    total_size: int
+    path: List[str] = []
+    mime_type: Optional[str] = None
+
+
 class FileResponse(BaseModel):
     id: str
     name: str

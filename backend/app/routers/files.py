@@ -18,7 +18,14 @@ from sqlalchemy import select, and_, or_
 from app.database import get_db
 from app.limiter import limiter
 from app.models import User, File as FileModel, ActivityLog
-from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest
+from app.schemas import (
+    FileResponse as FileResponseSchema, 
+    FileUpdate, 
+    FileMoveRequest,
+    ChunkedUploadInitRequest,
+    ChunkedUploadInitResponse,
+    ChunkedUploadCompleteRequest
+)
 from app.auth import get_current_user
 from app.config import get_settings
 from app.thumbnails import generate_thumbnail, can_generate_thumbnail
@@ -287,6 +294,197 @@ async def upload_files(
     
     await db.flush()
     return uploaded_files
+
+
+# --- CHUNKED UPLOAD ENDPOINTS ---
+
+@router.post("/upload/init", response_model=ChunkedUploadInitResponse)
+@limiter.limit("20/minute")
+async def init_chunked_upload(
+    request: Request,
+    init_req: ChunkedUploadInitRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Initialize a resumable chunked upload."""
+    # Check overall storage quota before starting
+    if current_user.storage_quota > 0 and current_user.storage_used + init_req.total_size > current_user.storage_quota:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Storage quota exceeded. Available: {current_user.storage_quota - current_user.storage_used} bytes"
+        )
+
+    # Per-file size limit check
+    if settings.max_file_size_bytes > 0 and init_req.total_size > settings.max_file_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail=f"File exceeds max size of {settings.max_file_size_bytes} bytes"
+        )
+
+    upload_id = str(uuid.uuid4())
+    temp_dir = os.path.join(settings.storage_path, "tmp", current_user.id, upload_id)
+    os.makedirs(temp_dir, exist_ok=True)
+
+    # Return the upload_id and standard chunk size (e.g. 5 MB)
+    return ChunkedUploadInitResponse(
+        upload_id=upload_id,
+        chunk_size=5 * 1024 * 1024, # 5 MB chunks
+    )
+
+
+@router.post("/upload/{upload_id}/chunk")
+@limiter.limit("120/minute")
+async def upload_chunk(
+    request: Request,
+    upload_id: str,
+    chunk_index: int = Query(..., description="0-based index of the chunk"),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user)
+):
+    """Upload a single chunk for a resumable upload."""
+    temp_dir = os.path.join(settings.storage_path, "tmp", current_user.id, upload_id)
+    
+    if not os.path.exists(temp_dir):
+        raise HTTPException(status_code=404, detail="Upload session not found or expired")
+
+    chunk_filepath = os.path.join(temp_dir, f"chunk_{chunk_index}")
+    
+    try:
+        async with aiofiles.open(chunk_filepath, 'wb') as f:
+            while True:
+                data = await file.read(CHUNK_SIZE)
+                if not data:
+                    break
+                await f.write(data)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to save chunk: {e}")
+
+    return {"status": "ok", "message": f"Chunk {chunk_index} received"}
+
+
+@router.post("/upload/complete", response_model=FileResponseSchema, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
+async def complete_chunked_upload(
+    request: Request,
+    complete_req: ChunkedUploadCompleteRequest,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    """Complete a chunked upload by assembling chunks into the final file."""
+    temp_dir = os.path.join(settings.storage_path, "tmp", current_user.id, complete_req.upload_id)
+    
+    if not os.path.exists(temp_dir):
+        raise HTTPException(status_code=404, detail="Upload session not found")
+
+    user_storage_path = os.path.join(settings.storage_path, current_user.id)
+    os.makedirs(user_storage_path, exist_ok=True)
+
+    safe_filename = sanitize_filename(complete_req.filename)
+    file_id = str(uuid.uuid4())
+    ext = safe_filename.split('.')[-1] if '.' in safe_filename else ''
+    storage_filename = f"{file_id}.{ext}" if ext else file_id
+    final_storage_filepath = os.path.join(user_storage_path, storage_filename)
+
+    # Assemble chunks
+    # We need to find all chunk files, sort them numerically, and append them
+    chunk_files = [f for f in os.listdir(temp_dir) if f.startswith("chunk_")]
+    # Extract the integer index for proper sorting (chunk_0, chunk_1, chunk_2, ... chunk_10)
+    chunk_files.sort(key=lambda x: int(x.split("_")[1]))
+
+    assembled_size = 0
+    try:
+        with open(final_storage_filepath, 'wb') as outfile:
+            for chunk_filename in chunk_files:
+                chunk_path = os.path.join(temp_dir, chunk_filename)
+                with open(chunk_path, 'rb') as infile:
+                    # Write in blocks
+                    while True:
+                        data = infile.read(65536)
+                        if not data:
+                            break
+                        outfile.write(data)
+                        assembled_size += len(data)
+    except Exception as e:
+        if os.path.exists(final_storage_filepath):
+            os.remove(final_storage_filepath)
+        raise HTTPException(status_code=500, detail=f"Failed to assemble file: {e}")
+
+    # Clean up temp dir
+    import shutil
+    try:
+        shutil.rmtree(temp_dir)
+    except Exception as e:
+        print(f"Warning: Failed to cleanup temp dir {temp_dir}: {e}")
+
+    # Verify size
+    if assembled_size != complete_req.total_size:
+        os.remove(final_storage_filepath)
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Size mismatch: Expected {complete_req.total_size}, got {assembled_size}. File deleted."
+        )
+
+    # Re-check storage quota (just in case it changed during upload)
+    if current_user.storage_quota > 0 and current_user.storage_used + assembled_size > current_user.storage_quota:
+        os.remove(final_storage_filepath)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Storage quota exceeded."
+        )
+
+    # Guess mime type if not provided
+    mime_type = complete_req.mime_type or mimetypes.guess_type(safe_filename)[0]
+
+    # Generate thumbnail
+    thumb_path = None
+    if can_generate_thumbnail(safe_filename):
+        thumb_dir = os.path.join(user_storage_path, "thumbnails")
+        thumb_path = generate_thumbnail(final_storage_filepath, thumb_dir, file_id)
+
+    # Create DB entry
+    now = datetime.now(timezone.utc)
+    new_file = FileModel(
+        id=file_id,
+        name=safe_filename,
+        type=get_file_type(safe_filename, mime_type),
+        mime_type=mime_type,
+        size=assembled_size,
+        path=normalize_path(serialize_path(complete_req.path)),
+        storage_path=final_storage_filepath,
+        thumbnail_path=thumb_path,
+        owner_id=current_user.id,
+        is_starred=False,
+        is_trashed=False,
+        created_at=now,
+        updated_at=now,
+    )
+    
+    db.add(new_file)
+    current_user.storage_used += assembled_size
+    
+    activity = ActivityLog(
+        user_id=current_user.id,
+        action="upload",
+        file_name=safe_filename,
+    )
+    db.add(activity)
+    
+    await db.flush()
+
+    thumb_url = f"/api/files/{new_file.id}/thumbnail" if new_file.thumbnail_path else None
+    return FileResponseSchema(
+        id=new_file.id,
+        name=new_file.name,
+        type=new_file.type,
+        mime_type=new_file.mime_type,
+        size=new_file.size,
+        path=parse_path(new_file.path),
+        is_starred=new_file.is_starred,
+        is_trashed=new_file.is_trashed,
+        thumbnail_url=thumb_url,
+        created_at=new_file.created_at,
+        updated_at=new_file.updated_at,
+    )
 
 
 @router.get("/{file_id}/download")

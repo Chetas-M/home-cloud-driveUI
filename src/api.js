@@ -6,7 +6,7 @@
 // Use relative URL in production (nginx proxies /api to backend)
 // In development, this can be overridden
 const API_BASE_URL = window.location.hostname === 'localhost'
-    ? 'http://localhost:8001/api'
+    ? 'http://localhost:8000/api'
     : '/api';
 
 class ApiService {
@@ -164,81 +164,164 @@ class ApiService {
     }
 
     /**
-     * Upload a single file with real-time progress tracking via XMLHttpRequest.
+     * Upload a single file using chunked resumable upload with real-time progress tracking.
      * @param {File} file - The file to upload
      * @param {Array} path - Current folder path
      * @param {Function} onProgress - Callback: ({ loaded, total, percent, speed, eta })
      * @returns {{ promise: Promise, abort: Function }}
      */
     uploadFileWithProgress(file, path = [], onProgress) {
-        const formData = new FormData();
-        formData.append('files', file);
+        let isAborted = false;
+        let currentXhr = null;
 
-        const params = new URLSearchParams();
-        params.append('path', JSON.stringify(path));
-
-        const url = `${API_BASE_URL}/files/upload?${params.toString()}`;
-        const token = this.getToken();
-
-        const xhr = new XMLHttpRequest();
-        let startTime = Date.now();
-        let lastLoaded = 0;
-        let lastTime = startTime;
-        let speedSamples = [];
-
-        const promise = new Promise((resolve, reject) => {
-            xhr.open('POST', url);
-            xhr.setRequestHeader('Authorization', `Bearer ${token}`);
-
-            xhr.upload.onprogress = (e) => {
-                if (!e.lengthComputable) return;
-
-                const now = Date.now();
-                const elapsed = (now - lastTime) / 1000;
-
-                if (elapsed >= 0.3) {
-                    const bytesPerSec = (e.loaded - lastLoaded) / elapsed;
-                    speedSamples.push(bytesPerSec);
-                    if (speedSamples.length > 5) speedSamples.shift();
-                    lastLoaded = e.loaded;
-                    lastTime = now;
-                }
-
-                const avgSpeed = speedSamples.length > 0
-                    ? speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length
-                    : 0;
-                const remaining = e.total - e.loaded;
-                const eta = avgSpeed > 0 ? Math.ceil(remaining / avgSpeed) : 0;
-                const percent = Math.round((e.loaded / e.total) * 100);
-
-                onProgress?.({
-                    loaded: e.loaded,
-                    total: e.total,
-                    percent,
-                    speed: avgSpeed,
-                    eta,
+        const promise = new Promise(async (resolve, reject) => {
+            try {
+                // 1. Initialize Upload
+                const initRes = await this.request('/files/upload/init', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        filename: file.name,
+                        total_size: file.size,
+                        path: path,
+                    }),
                 });
-            };
 
-            xhr.onload = () => {
-                if (xhr.status >= 200 && xhr.status < 300) {
-                    try {
-                        resolve(JSON.parse(xhr.responseText));
-                    } catch {
-                        resolve(xhr.responseText);
+                if (isAborted) throw new Error('Upload cancelled');
+
+                const { upload_id, chunk_size } = initRes;
+                const totalChunks = Math.ceil(file.size / chunk_size) || 1; // Handle 0-byte files
+
+                let loadedBytes = 0;
+                let startTime = Date.now();
+                let lastLoaded = 0;
+                let lastTime = startTime;
+                let speedSamples = [];
+
+                // 2. Upload Chunks sequentially
+                for (let i = 0; i < totalChunks; i++) {
+                    if (isAborted) throw new Error('Upload cancelled');
+
+                    const start = i * chunk_size;
+                    const end = Math.min(start + chunk_size, file.size);
+                    const chunk = file.slice(start, end);
+
+                    let chunkSuccess = false;
+                    let retries = 0;
+                    const maxRetries = 3;
+
+                    while (!chunkSuccess && retries < maxRetries) {
+                        if (isAborted) throw new Error('Upload cancelled');
+
+                        try {
+                            await new Promise((chunkResolve, chunkReject) => {
+                                const formData = new FormData();
+                                formData.append('file', chunk);
+
+                                const xhr = new XMLHttpRequest();
+                                currentXhr = xhr;
+                                const url = `${API_BASE_URL}/files/upload/${upload_id}/chunk?chunk_index=${i}`;
+
+                                xhr.open('POST', url);
+                                xhr.setRequestHeader('Authorization', `Bearer ${this.getToken()}`);
+
+                                xhr.upload.onprogress = (e) => {
+                                    if (!e.lengthComputable || isAborted) return;
+                                    
+                                    // Calculate overall progress
+                                    const currentLoaded = loadedBytes + e.loaded;
+                                    const now = Date.now();
+                                    const elapsed = (now - lastTime) / 1000;
+
+                                    if (elapsed >= 0.3) {
+                                        const bytesPerSec = (currentLoaded - lastLoaded) / elapsed;
+                                        speedSamples.push(bytesPerSec);
+                                        if (speedSamples.length > 5) speedSamples.shift();
+                                        lastLoaded = currentLoaded;
+                                        lastTime = now;
+                                    }
+
+                                    const avgSpeed = speedSamples.length > 0
+                                        ? speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length
+                                        : 0;
+                                    const remaining = file.size - currentLoaded;
+                                    const eta = avgSpeed > 0 ? Math.ceil(remaining / avgSpeed) : 0;
+                                    const percent = Math.round((currentLoaded / file.size) * 100);
+
+                                    onProgress?.({
+                                        loaded: currentLoaded,
+                                        total: file.size,
+                                        percent,
+                                        speed: avgSpeed,
+                                        eta,
+                                    });
+                                };
+
+                                xhr.onload = () => {
+                                    currentXhr = null;
+                                    if (xhr.status >= 200 && xhr.status < 300) {
+                                        chunkResolve();
+                                    } else {
+                                        chunkReject(new Error(`Chunk upload failed: ${xhr.status}`));
+                                    }
+                                };
+
+                                xhr.onerror = () => {
+                                    currentXhr = null;
+                                    chunkReject(new Error('Network error uploading chunk'));
+                                };
+                                
+                                xhr.onabort = () => {
+                                    currentXhr = null;
+                                    chunkReject(new Error('Upload cancelled'));
+                                };
+
+                                xhr.send(formData);
+                            });
+                            
+                            chunkSuccess = true;
+                            loadedBytes += (end - start);
+                        } catch (err) {
+                            if (err.message === 'Upload cancelled') throw err;
+                            retries++;
+                            if (retries >= maxRetries) {
+                                throw new Error(`Failed to upload chunk ${i} after ${maxRetries} attempts.`);
+                            }
+                            // Exponential backoff
+                            await new Promise(r => setTimeout(r, 1000 * Math.pow(2, retries)));
+                        }
                     }
-                } else {
-                    reject(new Error(`Upload failed: ${xhr.status}`));
                 }
-            };
 
-            xhr.onerror = () => reject(new Error('Upload network error'));
-            xhr.onabort = () => reject(new Error('Upload cancelled'));
+                if (isAborted) throw new Error('Upload cancelled');
 
-            xhr.send(formData);
+                // 3. Complete Upload
+                const completeRes = await this.request('/files/upload/complete', {
+                    method: 'POST',
+                    body: JSON.stringify({
+                        upload_id: upload_id,
+                        filename: file.name,
+                        total_size: file.size,
+                        path: path,
+                        mime_type: file.type || undefined,
+                    }),
+                });
+
+                resolve(completeRes);
+
+            } catch (err) {
+                reject(err);
+            }
         });
 
-        return { promise, abort: () => xhr.abort() };
+        return { 
+            promise, 
+            abort: () => {
+                isAborted = true;
+                if (currentXhr) {
+                    currentXhr.abort();
+                }
+            } 
+        };
     }
 
     async downloadFile(fileId) {
