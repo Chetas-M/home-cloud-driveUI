@@ -192,9 +192,8 @@ class ApiService {
                 const totalChunks = Math.ceil(file.size / chunk_size) || 1; // Handle 0-byte files
 
                 let loadedBytes = 0;
-                let startTime = Date.now();
                 let lastLoaded = 0;
-                let lastTime = startTime;
+                let lastTime = Date.now();
                 let speedSamples = [];
 
                 // 2. Upload Chunks sequentially
