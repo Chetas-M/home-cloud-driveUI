@@ -151,7 +151,8 @@ async def backfill_search_index():
                     break
 
                 for file in files:
-                    indexed_content = build_search_document(
+                    indexed_content = await asyncio.to_thread(
+                        build_search_document,
                         file.storage_path,
                         file.name,
                         file.mime_type,
@@ -182,6 +183,15 @@ async def backfill_search_index():
         print("[*] Search index backfill: no updates needed")
 
 
+def _backfill_done_callback(task: asyncio.Task) -> None:
+    """Log any unhandled exception from the backfill background task."""
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        print(f"[!] Search index backfill failed with unhandled exception: {exc!r}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -199,15 +209,26 @@ async def lifespan(app: FastAPI):
     await run_migrations()
     print("[+] Migrations complete")
 
-    # Populate missing content indexes as a non-blocking background task
-    asyncio.create_task(backfill_search_index())
+    # Populate missing content indexes as a non-blocking background task.
+    # Store the reference on app.state so it can be awaited/cancelled on shutdown
+    # and the done-callback surfaces any unexpected exceptions.
+    backfill_task = asyncio.create_task(backfill_search_index())
+    backfill_task.add_done_callback(_backfill_done_callback)
+    app.state.backfill_task = backfill_task
     
     # Auto-cleanup old trashed files
     await cleanup_old_trash()
     
     yield
     
-    # Shutdown
+    # Shutdown — cancel the backfill if it is still running
+    task = getattr(app.state, "backfill_task", None)
+    if task is not None and not task.done():
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
     print("[*] Shutting down Home Cloud Drive API...")
 
 
