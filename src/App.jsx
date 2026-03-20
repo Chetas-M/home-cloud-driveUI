@@ -54,6 +54,10 @@ export default function App() {
     const [isMultiSelect, setIsMultiSelect] = useState(false);
     const [selectedIds, setSelectedIds] = useState(new Set());
 
+    // Ref for stable keydown handler — avoids re-registering the global
+    // listener on every render that changes files/search/sort state.
+    const keydownStateRef = React.useRef({});
+
     // Modal/Panel state
     const [contextMenu, setContextMenu] = useState(null);
     const [previewFile, setPreviewFile] = useState(null);
@@ -176,8 +180,13 @@ export default function App() {
     }, [theme]);
 
     /* ---------------- KEYBOARD SHORTCUTS ---------------- */
+    // Register the listener once. The handler reads the latest values through
+    // keydownStateRef so the listener never needs to be removed/re-added.
     useEffect(() => {
         const handleKeyDown = (e) => {
+            const { selectedIds, currentView, filteredFiles, handleTrash } =
+                keydownStateRef.current;
+
             if (e.key === "Escape") {
                 setContextMenu(null);
                 setPreviewFile(null);
@@ -205,7 +214,7 @@ export default function App() {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [selectedIds, currentView, files, searchResults, sortBy, searchQuery]);
+    }, []); // Stable listener: latest state is read through keydownStateRef, not captured in closure.
 
     /* ---------------- UPLOAD ---------------- */
     const handleUpload = async (fileList) => {
@@ -616,6 +625,10 @@ export default function App() {
 
     const isSearchMode = searchQuery.trim().length > 0;
     const filteredFiles = getFilteredFiles();
+
+    // Keep the keydown handler ref up to date on every render so the stable
+    // listener always operates on the latest state without being re-registered.
+    keydownStateRef.current = { selectedIds, currentView, filteredFiles, handleTrash };
 
     // Get recent files (top 4 most recent non-folder files)
     const recentFiles = [...files]
