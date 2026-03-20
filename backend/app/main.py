@@ -107,7 +107,13 @@ async def backfill_search_index():
     Only rows with ``content_index IS NULL`` are treated as unprocessed, so
     binary files are not re-examined on every startup.
     """
-    import fcntl
+    try:
+        import fcntl as _fcntl
+    except ImportError:
+        # fcntl is not available on Windows; file locking is skipped on that platform.
+        _fcntl = None
+        print("[!] Search index backfill: fcntl unavailable, multi-worker lock disabled")
+
     from sqlalchemy import select
     from app.database import async_session
     from app.models import File as FileModel
@@ -115,19 +121,20 @@ async def backfill_search_index():
 
     lock_path = "./data/.backfill.lock"
     lock_fd = None
-    try:
-        lock_fd = open(lock_path, "w")
-        fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        print("[*] Search index backfill: another worker is already running, skipping")
-        if lock_fd is not None:
-            lock_fd.close()
-        return
-    except OSError as exc:
-        print(f"[!] Search index backfill: could not acquire lock ({exc}), skipping")
-        if lock_fd is not None:
-            lock_fd.close()
-        return
+    if _fcntl is not None:
+        try:
+            lock_fd = open(lock_path, "w")
+            _fcntl.flock(lock_fd, _fcntl.LOCK_EX | _fcntl.LOCK_NB)
+        except BlockingIOError:
+            print("[*] Search index backfill: another worker is already running, skipping")
+            if lock_fd is not None:
+                lock_fd.close()
+            return
+        except OSError as exc:
+            print(f"[!] Search index backfill: could not acquire lock ({exc}), skipping")
+            if lock_fd is not None:
+                lock_fd.close()
+            return
 
     try:
         total_updated = 0
@@ -161,8 +168,8 @@ async def backfill_search_index():
             await asyncio.sleep(0)
 
     finally:
-        if lock_fd is not None:
-            fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        if lock_fd is not None and _fcntl is not None:
+            _fcntl.flock(lock_fd, _fcntl.LOCK_UN)
             lock_fd.close()
         try:
             os.remove(lock_path)
