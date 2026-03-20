@@ -29,6 +29,10 @@ export default function App() {
     const [currentPath, setCurrentPath] = useState([]);
     const [files, setFiles] = useState([]);
     const [searchQuery, setSearchQuery] = useState("");
+    const [searchResults, setSearchResults] = useState([]);
+    const [searchLoading, setSearchLoading] = useState(false);
+    const [searchError, setSearchError] = useState("");
+    const [searchRefreshKey, setSearchRefreshKey] = useState(0);
     const [isDragging, setIsDragging] = useState(false);
     const [uploadProgress, setUploadProgress] = useState({});
     const uploadAbortRef = React.useRef(null);
@@ -104,6 +108,50 @@ export default function App() {
         loadFiles();
     }, [loadFiles]);
 
+    /* ---------------- SEARCH ---------------- */
+    useEffect(() => {
+        if (!user) return;
+
+        const trimmedQuery = searchQuery.trim();
+        const searchEnabled = currentView !== "activity" && currentView !== "trash" && currentView !== "admin";
+
+        if (!trimmedQuery || !searchEnabled) {
+            setSearchResults([]);
+            setSearchError("");
+            setSearchLoading(false);
+            return;
+        }
+
+        let cancelled = false;
+        const timeoutId = setTimeout(async () => {
+            setSearchLoading(true);
+            setSearchError("");
+
+            try {
+                const results = await api.searchFiles(trimmedQuery, {
+                    starredOnly: currentView === "starred",
+                });
+                if (!cancelled) {
+                    setSearchResults(results);
+                }
+            } catch (err) {
+                if (!cancelled) {
+                    setSearchError(err.message || "Search failed");
+                    setSearchResults([]);
+                }
+            } finally {
+                if (!cancelled) {
+                    setSearchLoading(false);
+                }
+            }
+        }, 250);
+
+        return () => {
+            cancelled = true;
+            clearTimeout(timeoutId);
+        };
+    }, [user, searchQuery, currentView, searchRefreshKey]);
+
     /* ---------------- LOAD ACTIVITY & STORAGE ---------------- */
     useEffect(() => {
         const loadExtra = async () => {
@@ -157,7 +205,7 @@ export default function App() {
 
         window.addEventListener("keydown", handleKeyDown);
         return () => window.removeEventListener("keydown", handleKeyDown);
-    }, [selectedIds, currentView]);
+    }, [selectedIds, currentView, files, searchResults, sortBy, searchQuery]);
 
     /* ---------------- UPLOAD ---------------- */
     const handleUpload = async (fileList) => {
@@ -224,6 +272,7 @@ export default function App() {
 
             // Clear progress after brief delay
             setTimeout(() => setUploadProgress({}), 1500);
+            setSearchRefreshKey((key) => key + 1);
             loadFiles();
         } catch (err) {
             if (err.message === 'Upload cancelled') {
@@ -347,6 +396,7 @@ export default function App() {
             }
 
             setTimeout(() => setUploadProgress({}), 1500);
+            setSearchRefreshKey((key) => key + 1);
             loadFiles();
         } catch (err) {
             if (err.message === 'Upload cancelled') {
@@ -397,6 +447,7 @@ export default function App() {
     const handleCreateFolder = async (name) => {
         try {
             await api.createFolder(name, currentPath);
+            setSearchRefreshKey((key) => key + 1);
             loadFiles();
         } catch (err) {
             console.error("Create folder failed:", err);
@@ -407,6 +458,7 @@ export default function App() {
     const handleRename = async (id, newName) => {
         try {
             await api.updateFile(id, { name: newName });
+            setSearchRefreshKey((key) => key + 1);
             loadFiles();
         } catch (err) {
             console.error("Rename failed:", err);
@@ -415,10 +467,11 @@ export default function App() {
 
     /* ---------------- STAR/UNSTAR ---------------- */
     const handleStar = async (id) => {
-        const file = files.find((f) => f.id === id);
+        const file = [...files, ...searchResults].find((f) => f.id === id);
         if (!file) return;
         try {
             await api.updateFile(id, { is_starred: !file.is_starred });
+            setSearchRefreshKey((key) => key + 1);
             loadFiles();
         } catch (err) {
             console.error("Star failed:", err);
@@ -430,6 +483,7 @@ export default function App() {
         try {
             await api.trashFile(id);
             setDetailsFile(null);
+            setSearchRefreshKey((key) => key + 1);
             loadFiles();
         } catch (err) {
             console.error("Trash failed:", err);
@@ -439,6 +493,7 @@ export default function App() {
     const handleRestore = async (id) => {
         try {
             await api.restoreFile(id);
+            setSearchRefreshKey((key) => key + 1);
             loadFiles();
             // Reload trash view
             const trashData = await api.listFiles([], { includeTrash: true });
@@ -452,6 +507,7 @@ export default function App() {
         if (!confirm("Delete forever? This cannot be undone.")) return;
         try {
             await api.deleteFilePermanently(id);
+            setSearchRefreshKey((key) => key + 1);
             setTrashedFiles((t) => t.filter((item) => item.id !== id));
         } catch (err) {
             console.error("Delete failed:", err);
@@ -462,6 +518,7 @@ export default function App() {
         if (!confirm("Permanently delete all items in trash? This cannot be undone.")) return;
         try {
             await api.emptyTrash();
+            setSearchRefreshKey((key) => key + 1);
             setTrashedFiles([]);
         } catch (err) {
             console.error("Empty trash failed:", err);
@@ -472,6 +529,7 @@ export default function App() {
     const handleMove = async (id, newPath) => {
         try {
             await api.updateFile(id, { path: newPath });
+            setSearchRefreshKey((key) => key + 1);
             loadFiles();
         } catch (err) {
             console.error("Move failed:", err);
@@ -484,6 +542,7 @@ export default function App() {
         try {
             await api.updateFile(fileId, { path: targetPath });
             await loadFiles();
+            setSearchRefreshKey((key) => key + 1);
             await loadExtra();
         } catch (err) {
             alert(err.message || "Failed to move file");
@@ -499,6 +558,7 @@ export default function App() {
         try {
             await api.copyFile(file.id);
             await loadFiles();
+            setSearchRefreshKey((key) => key + 1);
             await loadExtra();
         } catch (err) {
             alert(err.message || "Failed to copy file");
@@ -529,14 +589,7 @@ export default function App() {
 
     /* ---------------- FILTER & SORT ---------------- */
     const getFilteredFiles = () => {
-        let result = [...files];
-
-        // Search filter
-        if (searchQuery) {
-            result = result.filter((f) =>
-                f.name.toLowerCase().includes(searchQuery.toLowerCase())
-            );
-        }
+        let result = [...(isSearchMode ? searchResults : files)];
 
         // Sort
         result = result.sort((a, b) => {
@@ -561,6 +614,7 @@ export default function App() {
         return result;
     };
 
+    const isSearchMode = searchQuery.trim().length > 0;
     const filteredFiles = getFilteredFiles();
 
     // Get recent files (top 4 most recent non-folder files)
@@ -579,13 +633,18 @@ export default function App() {
             setCurrentPath([]);
         }
         setSearchQuery("");
+        setSearchResults([]);
+        setSearchError("");
         setSelectedIds(new Set());
         setIsMultiSelect(false);
     };
 
     const handleFileClick = (file) => {
         if (file.type === "folder") {
-            setCurrentPath([...currentPath, file.name]);
+            setSearchQuery("");
+            setSearchResults([]);
+            setSearchError("");
+            setCurrentPath([...(file.path || []), file.name]);
             setCurrentView("home");
         }
     };
@@ -597,6 +656,9 @@ export default function App() {
     };
 
     const handleNavigateToPath = (path) => {
+        setSearchQuery("");
+        setSearchResults([]);
+        setSearchError("");
         setCurrentPath(path);
         setCurrentView("home");
     };
@@ -667,10 +729,13 @@ export default function App() {
         api.logout();
         setUser(null);
         setFiles([]);
+        setSearchQuery("");
+        setSearchResults([]);
+        setSearchError("");
     };
 
     // Show recent section only on home view at root level
-    const showRecentSection = currentView === "home" && currentPath.length === 0 && recentFiles.length > 0;
+    const showRecentSection = currentView === "home" && currentPath.length === 0 && recentFiles.length > 0 && !isSearchMode;
 
     /* ---------------- AUTH LOADING ---------------- */
     if (authLoading) {
@@ -739,7 +804,7 @@ export default function App() {
                         if (isMultiSelect) setSelectedIds(new Set());
                     }}
                     selectedCount={selectedIds.size}
-                    viewTitle={viewTitles[currentView]}
+                    viewTitle={isSearchMode ? "Search Results" : viewTitles[currentView]}
                     user={user}
                     onLogout={handleLogout}
                     onMobileMenuToggle={() => setIsMobileMenuOpen(true)}
@@ -749,9 +814,9 @@ export default function App() {
                 <div className="file-area">
                     {isDragging && <DropZone />}
 
-                    {loading ? (
+                    {loading || searchLoading ? (
                         <div style={{ padding: '40px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                            Loading files...
+                            {searchLoading ? "Searching files..." : "Loading files..."}
                         </div>
                     ) : currentView === "trash" ? (
                         <TrashView
@@ -798,7 +863,14 @@ export default function App() {
                                 {showRecentSection && <h2 className="section-title">All Files</h2>}
 
                                 {filteredFiles.length === 0 ? (
-                                    <EmptyState />
+                                    <EmptyState
+                                        title={isSearchMode ? "No search results" : "No files here"}
+                                        subtitle={
+                                            isSearchMode
+                                                ? (searchError || `No matches found for "${searchQuery.trim()}"`)
+                                                : "Upload or drag files to get started"
+                                        }
+                                    />
                                 ) : (
                                     <div className={`file-grid ${view === "grid" ? "grid-view" : "list-view"}`}>
                                         {filteredFiles.map((file, index) => (

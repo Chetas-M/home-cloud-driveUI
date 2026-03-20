@@ -90,6 +90,41 @@ async def cleanup_old_trash():
         print(f"[+] Trash cleanup: deleted {deleted_count} files older than {days} days")
 
 
+async def backfill_search_index():
+    """Populate search indexes for existing files that predate indexing."""
+    from sqlalchemy import select, or_
+    from app.database import async_session
+    from app.models import File as FileModel
+    from app.search_index import build_search_document
+
+    async with async_session() as db:
+        result = await db.execute(
+            select(FileModel).where(
+                or_(FileModel.content_index == None, FileModel.content_index == "")
+            )
+        )
+        files = result.scalars().all()
+
+        updated_count = 0
+        for file in files:
+            indexed_content = build_search_document(
+                file.storage_path,
+                file.name,
+                file.mime_type,
+                file.type,
+            )
+            if indexed_content == file.content_index:
+                continue
+            file.content_index = indexed_content
+            updated_count += 1
+
+        if updated_count:
+            await db.commit()
+            print(f"[+] Search index backfill: updated {updated_count} files")
+        else:
+            print("[*] Search index backfill: no updates needed")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # Startup
@@ -106,6 +141,9 @@ async def lifespan(app: FastAPI):
     # Run migrations for new columns on existing tables
     await run_migrations()
     print("[+] Migrations complete")
+
+    # Populate missing content indexes for existing text-like files
+    await backfill_search_index()
     
     # Auto-cleanup old trashed files
     await cleanup_old_trash()

@@ -399,6 +399,8 @@ class ApiService {
         if (filters.type) params.append('type', filters.type);
         if (filters.dateFrom) params.append('date_from', filters.dateFrom);
         if (filters.dateTo) params.append('date_to', filters.dateTo);
+        if (filters.starredOnly) params.append('starred_only', 'true');
+        if (filters.includeTrash) params.append('include_trashed', 'true');
 
         return this.request(`/files/search?${params.toString()}`);
     }

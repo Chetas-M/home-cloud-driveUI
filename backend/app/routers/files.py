@@ -18,9 +18,10 @@ from sqlalchemy import select, and_, or_
 from app.database import get_db
 from app.limiter import limiter
 from app.models import User, File as FileModel, ActivityLog
-from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest
+from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest, SearchResult
 from app.auth import get_current_user
 from app.config import get_settings
+from app.search_index import build_match_context, build_search_document
 from app.thumbnails import generate_thumbnail, can_generate_thumbnail
 
 settings = get_settings()
@@ -125,6 +126,23 @@ def normalize_path(path_json: str) -> str:
     return serialize_path(parse_path(path_json or "[]"))
 
 
+def to_file_response(file: FileModel) -> FileResponseSchema:
+    thumb_url = f"/api/files/{file.id}/thumbnail" if file.thumbnail_path else None
+    return FileResponseSchema(
+        id=file.id,
+        name=file.name,
+        type=file.type,
+        mime_type=file.mime_type,
+        size=file.size,
+        path=parse_path(file.path),
+        is_starred=file.is_starred,
+        is_trashed=file.is_trashed,
+        thumbnail_url=thumb_url,
+        created_at=file.created_at,
+        updated_at=file.updated_at,
+    )
+
+
 @router.get("", response_model=List[FileResponseSchema])
 async def list_files(
     path: Optional[str] = Query(None, description="Path as JSON array"),
@@ -149,25 +167,75 @@ async def list_files(
     
     result = await db.execute(query.order_by(FileModel.type, FileModel.name))
     files = result.scalars().all()
-    
-    # Convert to response format
+
+    return [to_file_response(file) for file in files]
+
+
+@router.get("/search", response_model=List[SearchResult])
+async def search_files(
+    q: str = Query(..., min_length=1, description="Search query"),
+    file_type: Optional[str] = Query(None, alias="type"),
+    date_from: Optional[datetime] = Query(None),
+    date_to: Optional[datetime] = Query(None),
+    starred_only: bool = Query(False),
+    include_trashed: bool = Query(False),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Search files by name, path metadata, and indexed text content."""
+    normalized_query = q.strip()
+    if not normalized_query:
+        return []
+
+    like_query = f"%{normalized_query}%"
+    conditions = [
+        FileModel.owner_id == current_user.id,
+        or_(
+            FileModel.name.ilike(like_query),
+            FileModel.path.ilike(like_query),
+            FileModel.mime_type.ilike(like_query),
+            FileModel.type.ilike(like_query),
+            FileModel.content_index.ilike(like_query),
+        ),
+    ]
+
+    if not include_trashed:
+        conditions.append(FileModel.is_trashed == False)
+    if starred_only:
+        conditions.append(FileModel.is_starred == True)
+    if file_type:
+        conditions.append(FileModel.type == file_type)
+    if date_from:
+        conditions.append(FileModel.created_at >= date_from)
+    if date_to:
+        conditions.append(FileModel.created_at <= date_to)
+
+    result = await db.execute(
+        select(FileModel)
+        .where(and_(*conditions))
+        .order_by((FileModel.type == "folder").desc(), FileModel.updated_at.desc(), FileModel.name.asc())
+    )
+    files = result.scalars().all()
+
     response = []
-    for f in files:
-        thumb_url = f"/api/files/{f.id}/thumbnail" if f.thumbnail_path else None
-        response.append(FileResponseSchema(
-            id=f.id,
-            name=f.name,
-            type=f.type,
-            mime_type=f.mime_type,
-            size=f.size,
-            path=parse_path(f.path),
-            is_starred=f.is_starred,
-            is_trashed=f.is_trashed,
+    for file in files:
+        path_segments = parse_path(file.path)
+        thumb_url = f"/api/files/{file.id}/thumbnail" if file.thumbnail_path else None
+        response.append(SearchResult(
+            id=file.id,
+            name=file.name,
+            type=file.type,
+            mime_type=file.mime_type,
+            size=file.size,
+            path=path_segments,
+            is_starred=file.is_starred,
+            is_trashed=file.is_trashed,
             thumbnail_url=thumb_url,
-            created_at=f.created_at,
-            updated_at=f.updated_at,
+            created_at=file.created_at,
+            updated_at=file.updated_at,
+            match_context=build_match_context(file, normalized_query, path_segments),
         ))
-    
+
     return response
 
 
@@ -249,6 +317,7 @@ async def upload_files(
             size=file_size,
             path=normalize_path(path),
             storage_path=storage_filepath,
+            content_index=build_search_document(storage_filepath, safe_filename, mime_type, get_file_type(safe_filename, mime_type)),
             thumbnail_path=thumb_path,
             owner_id=current_user.id,
             is_starred=False,
@@ -270,20 +339,7 @@ async def upload_files(
         )
         db.add(activity)
         
-        thumb_url = f"/api/files/{new_file.id}/thumbnail" if new_file.thumbnail_path else None
-        uploaded_files.append(FileResponseSchema(
-            id=new_file.id,
-            name=new_file.name,
-            type=new_file.type,
-            mime_type=new_file.mime_type,
-            size=new_file.size,
-            path=parse_path(new_file.path),
-            is_starred=new_file.is_starred,
-            is_trashed=new_file.is_trashed,
-            thumbnail_url=thumb_url,
-            created_at=new_file.created_at,
-            updated_at=new_file.updated_at,
-        ))
+        uploaded_files.append(to_file_response(new_file))
     
     await db.flush()
     return uploaded_files
@@ -419,6 +475,7 @@ async def copy_file(
         size=original.size,
         path=original.path,
         storage_path=new_storage_path,
+        content_index=original.content_index,
         thumbnail_path=thumb_path,
         owner_id=current_user.id,
         is_starred=False,
@@ -439,20 +496,7 @@ async def copy_file(
     db.add(activity)
     await db.flush()
 
-    thumb_url = f"/api/files/{new_file.id}/thumbnail" if new_file.thumbnail_path else None
-    return FileResponseSchema(
-        id=new_file.id,
-        name=new_file.name,
-        type=new_file.type,
-        mime_type=new_file.mime_type,
-        size=new_file.size,
-        path=parse_path(new_file.path),
-        is_starred=new_file.is_starred,
-        is_trashed=new_file.is_trashed,
-        thumbnail_url=thumb_url,
-        created_at=new_file.created_at,
-        updated_at=new_file.updated_at,
-    )
+    return to_file_response(new_file)
 
 
 @router.patch("/{file_id}", response_model=FileResponseSchema)
@@ -508,18 +552,7 @@ async def update_file(
     await db.flush()
     await db.refresh(file)
     
-    return FileResponseSchema(
-        id=file.id,
-        name=file.name,
-        type=file.type,
-        mime_type=file.mime_type,
-        size=file.size,
-        path=parse_path(file.path),
-        is_starred=file.is_starred,
-        is_trashed=file.is_trashed,
-        created_at=file.created_at,
-        updated_at=file.updated_at,
-    )
+    return to_file_response(file)
 
 
 @router.post("/{file_id}/trash", response_model=FileResponseSchema)
@@ -573,18 +606,7 @@ async def trash_file(
     await db.flush()
     await db.refresh(file)
     
-    return FileResponseSchema(
-        id=file.id,
-        name=file.name,
-        type=file.type,
-        mime_type=file.mime_type,
-        size=file.size,
-        path=parse_path(file.path),
-        is_starred=file.is_starred,
-        is_trashed=file.is_trashed,
-        created_at=file.created_at,
-        updated_at=file.updated_at,
-    )
+    return to_file_response(file)
 
 
 @router.post("/{file_id}/restore", response_model=FileResponseSchema)
@@ -637,18 +659,7 @@ async def restore_file(
     await db.flush()
     await db.refresh(file)
     
-    return FileResponseSchema(
-        id=file.id,
-        name=file.name,
-        type=file.type,
-        mime_type=file.mime_type,
-        size=file.size,
-        path=parse_path(file.path),
-        is_starred=file.is_starred,
-        is_trashed=file.is_trashed,
-        created_at=file.created_at,
-        updated_at=file.updated_at,
-    )
+    return to_file_response(file)
 
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
