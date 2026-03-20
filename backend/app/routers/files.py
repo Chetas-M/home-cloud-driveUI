@@ -21,6 +21,7 @@ from app.models import User, File as FileModel, ActivityLog
 from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest, SearchResult
 from app.auth import get_current_user
 from app.config import get_settings
+from app.db_utils import LIKE_ESCAPE_CHAR, escape_like_literal
 from app.search_index import build_match_context, build_search_document
 from app.thumbnails import generate_thumbnail, can_generate_thumbnail
 
@@ -188,22 +189,16 @@ async def search_files(
         return []
 
     # Escape LIKE metacharacters so the query is treated as a literal substring.
-    # The backslash is used as the escape character and must be escaped first.
-    escaped_query = (
-        normalized_query
-        .replace("\\", "\\\\")
-        .replace("%", "\\%")
-        .replace("_", "\\_")
-    )
+    escaped_query = escape_like_literal(normalized_query)
     like_query = f"%{escaped_query}%"
     conditions = [
         FileModel.owner_id == current_user.id,
         or_(
-            FileModel.name.ilike(like_query, escape="\\"),
-            FileModel.path.ilike(like_query, escape="\\"),
-            FileModel.mime_type.ilike(like_query, escape="\\"),
-            FileModel.type.ilike(like_query, escape="\\"),
-            FileModel.content_index.ilike(like_query, escape="\\"),
+            FileModel.name.ilike(like_query, escape=LIKE_ESCAPE_CHAR),
+            FileModel.path.ilike(like_query, escape=LIKE_ESCAPE_CHAR),
+            FileModel.mime_type.ilike(like_query, escape=LIKE_ESCAPE_CHAR),
+            FileModel.type.ilike(like_query, escape=LIKE_ESCAPE_CHAR),
+            FileModel.content_index.ilike(like_query, escape=LIKE_ESCAPE_CHAR),
         ),
     ]
 
