@@ -17,7 +17,6 @@ from app.auth import (
     create_password_reset_token,
     create_temporary_login_token,
     generate_totp_secret,
-    get_current_session_id,
     get_current_user,
     get_password_hash,
     get_session_by_id,
@@ -283,12 +282,13 @@ async def login_with_two_factor(
 async def get_current_session_id(
     request: Request,
     current_user: User = Depends(get_current_user),
-) -> str:
+) -> str | None:
     """
     Extract the current session ID from the validated access token.
 
     Relies on get_current_user to ensure the request is authenticated,
-    then decodes the JWT to retrieve the 'sid' claim.
+    then decodes the JWT to retrieve the 'sid' claim. Returns None for
+    legacy tokens that pre-date session tracking.
     """
     from jose import jwt
 
@@ -296,24 +296,21 @@ async def get_current_session_id(
     token = auth_header.replace("Bearer ", "", 1).strip()
 
     payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-    session_id = payload.get("sid")
-    if session_id is None:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid session token")
-
-    return session_id
+    return payload.get("sid")
 
 
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
     request: Request,
-    session_id: str = Depends(get_current_session_id),
+    session_id: str | None = Depends(get_current_session_id),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke the current session."""
-    session = await get_session_by_id(db, session_id, current_user.id)
-    if session and session.revoked_at is None:
-        session.revoked_at = datetime.now(timezone.utc)
+    if session_id is not None:
+        session = await get_session_by_id(db, session_id, current_user.id)
+        if session and session.revoked_at is None:
+            session.revoked_at = datetime.now(timezone.utc)
 
     return {"detail": "Signed out successfully"}
 
@@ -327,7 +324,7 @@ async def get_me(current_user: User = Depends(get_current_user)):
 @router.get("/sessions", response_model=list[SessionResponse])
 async def get_sessions(
     current_user: User = Depends(get_current_user),
-    current_session_id: str = Depends(get_current_session_id),
+    current_session_id: str | None = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Return active and recent sessions for the current user."""

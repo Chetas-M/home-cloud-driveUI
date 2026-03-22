@@ -40,7 +40,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "access"})
     encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
     return encoded_jwt
 
@@ -179,28 +179,23 @@ async def _get_jwt_payload(
         headers={"WWW-Authenticate": "Bearer"},
     )
     try:
-        return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        user_id: str = payload.get("sub")
+        if user_id is None:
+            raise credentials_exception
+        # Reject non-access tokens (e.g., password_reset, login_2fa) that share
+        # the same secret. Legacy access tokens without a 'type' claim are still
+        # accepted for backward compatibility.
+        token_type: str | None = payload.get("type")
+        if token_type is not None and token_type != "access":
+            raise credentials_exception
+        return payload
     except JWTError:
         raise credentials_exception
 
 
-async def get_current_session_id(
-    payload: dict = Depends(_get_jwt_payload),
-) -> str:
-    """Extract and return the session ID from the current JWT payload."""
-    session_id: str = payload.get("sid")
-    if session_id is None:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Could not validate credentials",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-    return session_id
-
-
 async def get_current_user(
     payload: dict = Depends(_get_jwt_payload),
-    session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     credentials_exception = HTTPException(
@@ -217,6 +212,16 @@ async def get_current_user(
     user = result.scalar_one_or_none()
     if user is None:
         raise credentials_exception
+
+    session_id: str | None = payload.get("sid")
+    # Transition support: legacy tokens issued before session tracking was introduced
+    # may not carry a 'sid' claim. Accept them as untracked sessions so existing users
+    # are not forcibly signed out after deploy. Note that these tokens cannot be
+    # individually revoked via device management. Once all clients have re-authenticated
+    # and received session-aware tokens, this branch should be removed to enforce
+    # full session validation for all tokens.
+    if session_id is None:
+        return user
 
     session_result = await db.execute(
         select(UserSession).where(
