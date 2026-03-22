@@ -209,7 +209,18 @@ async def get_current_user(
     if current_session.expires_at <= datetime.now(timezone.utc):
         raise credentials_exception
 
-    current_session.last_seen_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    update_interval = settings.session_last_seen_update_interval_seconds
+    last_seen = current_session.last_seen_at
+    if last_seen is not None and last_seen.tzinfo is None:
+        # SQLite returns naive datetimes; values are stored as UTC so tag them.
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    if (
+        update_interval == 0
+        or last_seen is None
+        or (now - last_seen).total_seconds() >= update_interval
+    ):
+        current_session.last_seen_at = now
     return user
 
 
