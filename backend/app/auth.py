@@ -40,7 +40,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
         expire = datetime.now(timezone.utc) + expires_delta
     else:
         expire = datetime.now(timezone.utc) + timedelta(minutes=settings.access_token_expire_minutes)
-    to_encode.update({"exp": expire})
+    to_encode.update({"exp": expire, "type": "access"})
     encoded_jwt = jwt.encode(to_encode, settings.secret_key, algorithm=settings.algorithm)
     return encoded_jwt
 
@@ -181,11 +181,15 @@ async def _get_jwt_payload(
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
         user_id: str = payload.get("sub")
-        session_id: str = payload.get("sid")
         if user_id is None:
             raise credentials_exception
-        token_data = TokenData(user_id=user_id)
-        return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+        # Reject non-access tokens (e.g., password_reset, login_2fa) that share
+        # the same secret. Legacy access tokens without a 'type' claim are still
+        # accepted for backward compatibility.
+        token_type: str | None = payload.get("type")
+        if token_type is not None and token_type != "access":
+            raise credentials_exception
+        return payload
     except JWTError:
         raise credentials_exception
 
