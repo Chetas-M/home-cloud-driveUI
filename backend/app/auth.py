@@ -169,8 +169,38 @@ def verify_password_reset_token(token: str) -> str:
     return user_id
 
 
-async def get_current_user(
+async def _get_jwt_payload(
     token: str = Depends(oauth2_scheme),
+) -> dict:
+    """Decode the JWT and return its payload; raises 401 on invalid tokens."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    try:
+        return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    except JWTError:
+        raise credentials_exception
+
+
+async def get_current_session_id(
+    payload: dict = Depends(_get_jwt_payload),
+) -> str:
+    """Extract and return the session ID from the current JWT payload."""
+    session_id: str = payload.get("sid")
+    if session_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return session_id
+
+
+async def get_current_user(
+    payload: dict = Depends(_get_jwt_payload),
+    session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db)
 ) -> User:
     credentials_exception = HTTPException(
@@ -178,17 +208,10 @@ async def get_current_user(
         detail="Could not validate credentials",
         headers={"WWW-Authenticate": "Bearer"},
     )
-    try:
-        payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-        user_id: str = payload.get("sub")
-        session_id: str = payload.get("sid")
-        if user_id is None:
-            raise credentials_exception
-        if session_id is None:
-            raise credentials_exception
-        token_data = TokenData(user_id=user_id)
-    except JWTError:
+    user_id: str = payload.get("sub")
+    if user_id is None:
         raise credentials_exception
+    token_data = TokenData(user_id=user_id)
 
     result = await db.execute(select(User).where(User.id == token_data.user_id))
     user = result.scalar_one_or_none()
