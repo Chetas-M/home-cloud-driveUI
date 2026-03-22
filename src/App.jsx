@@ -17,6 +17,7 @@ import StorageChart from "./components/StorageChart";
 import AuthPage from "./components/AuthPage";
 import AdminPanel from "./components/AdminPanel";
 import ShareModal from "./components/ShareModal";
+import SecurityModal from "./components/SecurityModal";
 import api from "./api";
 
 export default function App() {
@@ -66,6 +67,7 @@ export default function App() {
     const [renameFile, setRenameFile] = useState(null);
     const [moveFile, setMoveFile] = useState(null);
     const [shareFile, setShareFile] = useState(null);
+    const [showSecurityModal, setShowSecurityModal] = useState(false);
 
     /* ---------------- AUTH CHECK ---------------- */
     useEffect(() => {
@@ -738,13 +740,19 @@ export default function App() {
     };
 
     /* ---------------- LOGOUT ---------------- */
-    const handleLogout = () => {
+    const handleLogout = async () => {
+        await api.logoutCurrentSession();
+        handleLocalSignOut();
+    };
+
+    const handleLocalSignOut = () => {
         api.logout();
         setUser(null);
         setFiles([]);
         setSearchQuery("");
         setSearchResults([]);
         setSearchError("");
+        setShowSecurityModal(false);
     };
 
     // Show recent section only on home view at root level
@@ -820,6 +828,7 @@ export default function App() {
                     viewTitle={isSearchMode ? "Search Results" : viewTitles[currentView]}
                     user={user}
                     onLogout={handleLogout}
+                    onOpenSecurity={() => setShowSecurityModal(true)}
                     onMobileMenuToggle={() => setIsMobileMenuOpen(true)}
                     showFileControls={currentView !== "activity" && currentView !== "trash" && currentView !== "admin"}
                 />
@@ -999,6 +1008,15 @@ export default function App() {
                 <ShareModal
                     file={shareFile}
                     onClose={() => setShareFile(null)}
+                />
+            )}
+
+            {showSecurityModal && (
+                <SecurityModal
+                    user={user}
+                    onClose={() => setShowSecurityModal(false)}
+                    onUserUpdate={setUser}
+                    onSignedOut={handleLocalSignOut}
                 />
             )}
         </div>

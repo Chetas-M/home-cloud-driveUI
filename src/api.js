@@ -103,7 +103,21 @@ class ApiService {
         }
 
         const data = await response.json();
-        this.setToken(data.access_token);
+        if (data.access_token) {
+            this.setToken(data.access_token);
+        }
+        return data;
+    }
+
+    async verifyTwoFactorLogin(temporaryToken, code) {
+        const data = await this.request('/auth/login/2fa', {
+            method: 'POST',
+            body: JSON.stringify({ temporary_token: temporaryToken, code }),
+            skipAuth: true,
+        });
+        if (data.access_token) {
+            this.setToken(data.access_token);
+        }
         return data;
     }
 
@@ -113,6 +127,16 @@ class ApiService {
 
     logout() {
         this.setToken(null);
+    }
+
+    async logoutCurrentSession() {
+        try {
+            await this.request('/auth/logout', {
+                method: 'POST',
+            });
+        } finally {
+            this.setToken(null);
+        }
     }
 
     async changePassword(currentPassword, newPassword) {
@@ -135,6 +159,36 @@ class ApiService {
             method: 'POST',
             body: JSON.stringify({ token, new_password: newPassword }),
             skipAuth: true,
+        });
+    }
+
+    async getTwoFactorSetup() {
+        return this.request('/auth/2fa/setup', {
+            method: 'POST',
+        });
+    }
+
+    async enableTwoFactor(code) {
+        return this.request('/auth/2fa/enable', {
+            method: 'POST',
+            body: JSON.stringify({ code }),
+        });
+    }
+
+    async disableTwoFactor(password, code) {
+        return this.request('/auth/2fa/disable', {
+            method: 'POST',
+            body: JSON.stringify({ password, code }),
+        });
+    }
+
+    async getSessions() {
+        return this.request('/auth/sessions');
+    }
+
+    async revokeSession(sessionId) {
+        return this.request(`/auth/sessions/${sessionId}`, {
+            method: 'DELETE',
         });
     }
 

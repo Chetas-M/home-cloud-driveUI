@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     algorithm: str = "HS256"
     access_token_expire_minutes: int = 1440  # 24 hours
     password_reset_expire_minutes: int = 30
+    two_factor_temp_token_expire_minutes: int = 10
 
     # Database
     database_url: str = "sqlite+aiosqlite:///./data/homecloud.db"
@@ -60,6 +61,10 @@ class Settings(BaseSettings):
         """Parse CORS origins from comma-separated string"""
         return [origin.strip() for origin in self.cors_origins_str.split(',') if origin.strip()]
 
+    # Session last-seen throttle — only write last_seen_at if older than this many seconds.
+    # Reduces write amplification on busy deployments (set to 0 to always update).
+    session_last_seen_update_interval_seconds: int = 60
+
     # Registration control - default OFF for secure-by-default; enable explicitly via env
     allow_registration: bool = False
 
@@ -78,6 +83,13 @@ class Settings(BaseSettings):
     @property
     def password_reset_enabled(self) -> bool:
         """Password reset requires a delivery channel for reset links."""
+        if not self.smtp_enabled:
+            return False
+        return True
+
+    @property
+    def smtp_enabled(self) -> bool:
+        """SMTP is configured well enough to send transactional emails."""
         if not self.smtp_host or not self.smtp_from_email:
             return False
         if self.smtp_use_ssl and self.smtp_use_tls:

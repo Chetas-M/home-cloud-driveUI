@@ -42,6 +42,7 @@ export default function Header({
     viewTitle,
     user,
     onLogout,
+    onOpenSecurity,
     onMobileMenuToggle,
     showFileControls = true,
 }) {
@@ -241,6 +242,16 @@ export default function Header({
                                 <User size={16} />
                                 <span>{user?.username || user?.email}</span>
                             </div>
+                            <button
+                                className="user-menu-item"
+                                onClick={() => {
+                                    setShowUserMenu(false);
+                                    onOpenSecurity?.();
+                                }}
+                            >
+                                <Settings size={16} />
+                                <span>Account Security</span>
+                            </button>
                             <button
                                 className="user-menu-item danger"
                                 onClick={() => {

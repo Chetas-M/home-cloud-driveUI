@@ -8,6 +8,8 @@ export default function AuthPage({ onLogin }) {
     const [username, setUsername] = useState('');
     const [password, setPassword] = useState('');
     const [confirmPassword, setConfirmPassword] = useState('');
+    const [twoFactorCode, setTwoFactorCode] = useState('');
+    const [temporaryToken, setTemporaryToken] = useState('');
     const [showPassword, setShowPassword] = useState(false);
     const [error, setError] = useState('');
     const [message, setMessage] = useState('');
@@ -20,6 +22,7 @@ export default function AuthPage({ onLogin }) {
     const isRegister = authMode === 'register';
     const isForgotPassword = authMode === 'forgot';
     const isResetPassword = authMode === 'reset';
+    const isTwoFactor = authMode === '2fa';
 
     useEffect(() => {
         const container = starsRef.current;
@@ -86,6 +89,8 @@ export default function AuthPage({ onLogin }) {
         setUsername('');
         setPassword('');
         setConfirmPassword('');
+        setTwoFactorCode('');
+        setTemporaryToken('');
         setResetToken('');
         setShowPassword(false);
         setError('');
@@ -97,10 +102,14 @@ export default function AuthPage({ onLogin }) {
         setMessage('');
         setPassword('');
         setConfirmPassword('');
+        setTwoFactorCode('');
         setShowPassword(false);
         if (mode !== 'reset') {
             setResetToken('');
             clearUrlResetToken();
+        }
+        if (mode !== '2fa') {
+            setTemporaryToken('');
         }
     };
 
@@ -112,7 +121,18 @@ export default function AuthPage({ onLogin }) {
 
         try {
             if (isLogin) {
-                await api.login(email, password);
+                const loginResponse = await api.login(email, password);
+                if (loginResponse.requires_2fa) {
+                    setTemporaryToken(loginResponse.temporary_token);
+                    setPassword('');
+                    setAuthMode('2fa');
+                    setMessage('Enter the 6-digit code from your authenticator app.');
+                    return;
+                }
+                const user = await api.getMe();
+                onLogin(user);
+            } else if (isTwoFactor) {
+                await api.verifyTwoFactorLogin(temporaryToken, twoFactorCode);
                 const user = await api.getMe();
                 onLogin(user);
             } else if (isRegister) {
@@ -145,13 +165,15 @@ export default function AuthPage({ onLogin }) {
         ? 'Please wait...'
         : isLogin
             ? 'Login'
+            : isTwoFactor
+                ? 'Verify Code'
             : isRegister
                 ? 'Create Account'
                 : isForgotPassword
                     ? 'Send Reset Link'
                     : 'Update Password';
 
-    const emailField = !isResetPassword && (
+    const emailField = !isResetPassword && !isTwoFactor && (
         <div className="sky-login__field">
             <div className="sky-login__cloud sky-login__cloud--1">
                 <div className="sky-login__cloud-bump sky-login__cloud-bump--left" />
@@ -190,7 +212,7 @@ export default function AuthPage({ onLogin }) {
         </div>
     );
 
-    const passwordField = !isForgotPassword && (
+    const passwordField = !isForgotPassword && !isTwoFactor && (
         <div className="sky-login__field">
             <div className="sky-login__cloud sky-login__cloud--2">
                 <div className="sky-login__cloud-bump sky-login__cloud-bump--left-lg" />
@@ -237,6 +259,27 @@ export default function AuthPage({ onLogin }) {
         </div>
     );
 
+    const twoFactorField = isTwoFactor && (
+        <div className="sky-login__field">
+            <div className="sky-login__cloud sky-login__cloud--2">
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--left-lg" />
+                <div className="sky-login__cloud-bump sky-login__cloud-bump--right-md" />
+            </div>
+            <div className="sky-login__string" />
+            <div className="sky-login__glass-input">
+                <input
+                    type="text"
+                    inputMode="numeric"
+                    pattern="[0-9]{6}"
+                    placeholder="6-digit authentication code"
+                    value={twoFactorCode}
+                    onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                    required
+                />
+            </div>
+        </div>
+    );
+
     return (
         <main className="sky-login">
             <div className="sky-stars" ref={starsRef} />
@@ -270,6 +313,7 @@ export default function AuthPage({ onLogin }) {
                 {usernameField}
                 {passwordField}
                 {confirmPasswordField}
+                {twoFactorField}
 
                 <div className="sky-login__field">
                     <div className="sky-login__cloud sky-login__cloud--3">
@@ -294,7 +338,7 @@ export default function AuthPage({ onLogin }) {
 
                     <div className="sky-rig__thread sky-rig__thread--long" />
 
-                    {!isResetPassword && (
+                    {!isResetPassword && !isTwoFactor && (
                         <div className="sky-rig__card">
                             <div className="sky-rig__card-inner">
                                 {isForgotPassword ? <Mail size={18} className="sky-rig__icon" /> : <User size={18} className="sky-rig__icon" />}
@@ -329,6 +373,7 @@ export default function AuthPage({ onLogin }) {
                     )}
 
                     {!isForgotPassword && (
+                        !isTwoFactor && (
                         <>
                             <div className="sky-rig__thread sky-rig__thread--short" />
                             <div className="sky-rig__card">
@@ -349,6 +394,27 @@ export default function AuthPage({ onLogin }) {
                                     >
                                         {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
                                     </button>
+                                </div>
+                            </div>
+                        </>
+                        )
+                    )}
+
+                    {isTwoFactor && (
+                        <>
+                            <div className="sky-rig__thread sky-rig__thread--short" />
+                            <div className="sky-rig__card">
+                                <div className="sky-rig__card-inner">
+                                    <Lock size={18} className="sky-rig__icon" />
+                                    <input
+                                        type="text"
+                                        inputMode="numeric"
+                                        pattern="[0-9]{6}"
+                                        placeholder="6-digit authentication code"
+                                        value={twoFactorCode}
+                                        onChange={(e) => setTwoFactorCode(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                                        required
+                                    />
                                 </div>
                             </div>
                         </>
@@ -390,12 +456,20 @@ export default function AuthPage({ onLogin }) {
                         {isForgotPassword ? 'Back to Sign In' : 'Forgot Password?'}
                     </button>
                 )}
-                {!isForgotPassword && !isResetPassword && (
+                {!isForgotPassword && !isResetPassword && !isTwoFactor && (
                     <button
                         type="button"
                         onClick={() => handleModeChange(isLogin ? 'register' : 'login')}
                     >
                         {isLogin ? 'Create Account' : 'Sign In'}
+                    </button>
+                )}
+                {isTwoFactor && (
+                    <button
+                        type="button"
+                        onClick={() => handleModeChange('login')}
+                    >
+                        Back to Sign In
                     </button>
                 )}
                 {isResetPassword && (

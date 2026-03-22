@@ -22,6 +22,9 @@ async def run_migrations():
     
     migrations = [
         ("users", "is_admin", "ALTER TABLE users ADD COLUMN is_admin BOOLEAN DEFAULT 0"),
+        ("users", "two_factor_enabled", "ALTER TABLE users ADD COLUMN two_factor_enabled BOOLEAN DEFAULT 0"),
+        ("users", "two_factor_secret", "ALTER TABLE users ADD COLUMN two_factor_secret VARCHAR(64)"),
+        ("users", "two_factor_pending_secret", "ALTER TABLE users ADD COLUMN two_factor_pending_secret VARCHAR(64)"),
         ("files", "content_index", "ALTER TABLE files ADD COLUMN content_index TEXT"),
         ("files", "thumbnail_path", "ALTER TABLE files ADD COLUMN thumbnail_path VARCHAR(500)"),
     ]
