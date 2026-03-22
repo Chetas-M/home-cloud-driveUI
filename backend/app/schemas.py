@@ -24,6 +24,7 @@ class UserResponse(BaseModel):
     email: str
     username: str
     is_admin: bool = False
+    two_factor_enabled: bool = False
     storage_used: int
     storage_quota: int
     created_at: datetime
@@ -33,8 +34,10 @@ class UserResponse(BaseModel):
 
 
 class Token(BaseModel):
-    access_token: str
+    access_token: Optional[str] = None
     token_type: str = "bearer"
+    requires_2fa: bool = False
+    temporary_token: Optional[str] = None
 
 
 class TokenData(BaseModel):
@@ -57,6 +60,41 @@ class ResetPasswordConfirm(BaseModel):
 
 class AdminPasswordReset(BaseModel):
     new_password: str = Field(..., min_length=6)
+
+
+class TwoFactorSetupResponse(BaseModel):
+    secret: str
+    otpauth_url: str
+
+
+class TwoFactorEnableRequest(BaseModel):
+    code: str = Field(..., min_length=6, max_length=6)
+
+
+class TwoFactorDisableRequest(BaseModel):
+    password: str
+    code: str = Field(..., min_length=6, max_length=6)
+
+
+class TwoFactorLoginRequest(BaseModel):
+    temporary_token: str
+    code: str = Field(..., min_length=6, max_length=6)
+
+
+class SessionResponse(BaseModel):
+    id: str
+    ip_address: Optional[str] = None
+    user_agent: Optional[str] = None
+    device_name: Optional[str] = None
+    created_at: datetime
+    last_seen_at: datetime
+    expires_at: datetime
+    revoked_at: Optional[datetime] = None
+    is_suspicious: bool = False
+    is_current: bool = False
+
+    class Config:
+        from_attributes = True
 
 
 # ============ FILE SCHEMAS ============

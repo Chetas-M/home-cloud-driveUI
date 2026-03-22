@@ -25,6 +25,9 @@ class User(Base):
     email = Column(String(255), unique=True, nullable=False, index=True)
     username = Column(String(100), unique=True, nullable=False)
     password_hash = Column(String(255), nullable=False)
+    two_factor_enabled = Column(Boolean, default=False)
+    two_factor_secret = Column(String(64), nullable=True)
+    two_factor_pending_secret = Column(String(64), nullable=True)
     is_admin = Column(Boolean, default=False)
     storage_used = Column(BigInteger, default=0)  # bytes
     storage_quota = Column(BigInteger, default=107374182400)  # 100 GB
@@ -33,6 +36,7 @@ class User(Base):
 
     # Relationships
     files = relationship("File", back_populates="owner", cascade="all, delete-orphan")
+    sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
 
 
 class File(Base):
@@ -92,3 +96,20 @@ class ActivityLog(Base):
     action = Column(String(50), nullable=False)  # upload, download, rename, trash, etc.
     file_name = Column(String(255), nullable=False)
     timestamp = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class UserSession(Base):
+    __tablename__ = "user_sessions"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    ip_address = Column(String(64), nullable=True)
+    user_agent = Column(Text, nullable=True)
+    device_name = Column(String(255), nullable=True)
+    expires_at = Column(DateTime, nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    last_seen_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    revoked_at = Column(DateTime, nullable=True)
+    is_suspicious = Column(Boolean, default=False)
+
+    user = relationship("User", back_populates="sessions")
