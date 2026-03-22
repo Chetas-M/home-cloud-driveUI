@@ -279,23 +279,37 @@ async def login_with_two_factor(
     return await create_user_session(request, user, db, background_tasks)
 
 
+async def get_current_session_id(
+    request: Request,
+    current_user: User = Depends(get_current_user),
+) -> str:
+    """
+    Extract the current session ID from the validated access token.
+
+    Relies on get_current_user to ensure the request is authenticated,
+    then decodes the JWT to retrieve the 'sid' claim.
+    """
+    from jose import jwt
+
+    auth_header = request.headers.get("authorization", "")
+    token = auth_header.replace("Bearer ", "", 1).strip()
+
+    payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
+    session_id = payload.get("sid")
+    if session_id is None:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid session token")
+
+    return session_id
+
+
 @router.post("/logout", status_code=status.HTTP_200_OK)
 async def logout(
     request: Request,
+    session_id: str = Depends(get_current_session_id),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     """Revoke the current session."""
-    auth_header = request.headers.get("authorization", "")
-    token = auth_header.replace("Bearer ", "", 1).strip()
-
-    if not token:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing access token")
-
-    from jose import jwt
-
-    payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
-    session_id = payload.get("sid")
     session = await get_session_by_id(db, session_id, current_user.id)
     if session and session.revoked_at is None:
         session.revoked_at = datetime.now(timezone.utc)
