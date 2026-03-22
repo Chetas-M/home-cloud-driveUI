@@ -169,10 +169,10 @@ def verify_password_reset_token(token: str) -> str:
     return user_id
 
 
-async def get_current_user(
+async def _get_jwt_payload(
     token: str = Depends(oauth2_scheme),
-    db: AsyncSession = Depends(get_db)
-) -> User:
+) -> dict:
+    """Decode the JWT and return its payload; raises 401 on invalid tokens."""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
         detail="Could not validate credentials",
@@ -185,8 +185,39 @@ async def get_current_user(
         if user_id is None:
             raise credentials_exception
         token_data = TokenData(user_id=user_id)
+        return jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
     except JWTError:
         raise credentials_exception
+
+
+async def get_current_session_id(
+    payload: dict = Depends(_get_jwt_payload),
+) -> str:
+    """Extract and return the session ID from the current JWT payload."""
+    session_id: str = payload.get("sid")
+    if session_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Could not validate credentials",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return session_id
+
+
+async def get_current_user(
+    payload: dict = Depends(_get_jwt_payload),
+    session_id: str = Depends(get_current_session_id),
+    db: AsyncSession = Depends(get_db)
+) -> User:
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    user_id: str = payload.get("sub")
+    if user_id is None:
+        raise credentials_exception
+    token_data = TokenData(user_id=user_id)
 
     result = await db.execute(select(User).where(User.id == token_data.user_id))
     user = result.scalar_one_or_none()
@@ -216,7 +247,18 @@ async def get_current_user(
     if current_session.expires_at <= datetime.now(timezone.utc):
         raise credentials_exception
 
-    current_session.last_seen_at = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc)
+    update_interval = settings.session_last_seen_update_interval_seconds
+    last_seen = current_session.last_seen_at
+    if last_seen is not None and last_seen.tzinfo is None:
+        # SQLite returns naive datetimes; values are stored as UTC so tag them.
+        last_seen = last_seen.replace(tzinfo=timezone.utc)
+    if (
+        update_interval == 0
+        or last_seen is None
+        or (now - last_seen).total_seconds() >= update_interval
+    ):
+        current_session.last_seen_at = now
     return user
 
 

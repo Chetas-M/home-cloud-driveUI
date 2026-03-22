@@ -17,6 +17,7 @@ from app.auth import (
     create_password_reset_token,
     create_temporary_login_token,
     generate_totp_secret,
+    get_current_session_id,
     get_current_user,
     get_password_hash,
     get_session_by_id,
@@ -325,19 +326,11 @@ async def get_me(current_user: User = Depends(get_current_user)):
 
 @router.get("/sessions", response_model=list[SessionResponse])
 async def get_sessions(
-    request: Request,
     current_user: User = Depends(get_current_user),
+    current_session_id: str = Depends(get_current_session_id),
     db: AsyncSession = Depends(get_db),
 ):
     """Return active and recent sessions for the current user."""
-    auth_header = request.headers.get("authorization", "")
-    current_token = auth_header.replace("Bearer ", "", 1).strip()
-
-    from jose import jwt
-
-    payload = jwt.decode(current_token, settings.secret_key, algorithms=[settings.algorithm])
-    current_session_id = payload.get("sid")
-
     result = await db.execute(
         select(UserSession)
         .where(UserSession.user_id == current_user.id)
