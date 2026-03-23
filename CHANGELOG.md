@@ -1,6 +1,6 @@
 # Home Cloud Drive — Development Report
 
-## Latest Updates (Feb 18–Mar 21, 2026)
+## Latest Updates (Feb 18–Mar 23, 2026)
 
 ### 🚀 Major Features
 - **Server-Backed File Search:** Real database search with background auto-indexing to keep the UI snappy without blocking the main event loop. Added LIKE metacharacter escaping to prevent wildcard injections.
