@@ -159,22 +159,23 @@ export default function App() {
     }, [user, searchQuery, currentView, searchRefreshKey]);
 
     /* ---------------- LOAD ACTIVITY & STORAGE ---------------- */
+    const loadExtra = useCallback(async () => {
+        if (!user) return;
+        try {
+            const [activities, storage] = await Promise.all([
+                api.getActivityLog(50),
+                api.getStorageInfo(),
+            ]);
+            setActivityLog(activities);
+            setStorageInfo(storage);
+        } catch (err) {
+            console.error("Failed to load extra data:", err);
+        }
+    }, [user]);
+
     useEffect(() => {
-        const loadExtra = async () => {
-            if (!user) return;
-            try {
-                const [activities, storage] = await Promise.all([
-                    api.getActivityLog(50),
-                    api.getStorageInfo(),
-                ]);
-                setActivityLog(activities);
-                setStorageInfo(storage);
-            } catch (err) {
-                console.error("Failed to load extra data:", err);
-            }
-        };
         loadExtra();
-    }, [user, files]);
+    }, [loadExtra, files]);
 
     /* ---------------- THEME ---------------- */
     useEffect(() => {

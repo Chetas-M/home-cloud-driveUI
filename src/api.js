@@ -5,7 +5,8 @@
 
 // Use relative URL in production (nginx proxies /api to backend)
 // In development, this can be overridden
-const API_BASE_URL = window.location.hostname === 'localhost'
+const LOCAL_API_HOSTS = new Set(['localhost', '127.0.0.1', '::1']);
+const API_BASE_URL = LOCAL_API_HOSTS.has(window.location.hostname)
     ? 'http://localhost:8000/api'
     : '/api';
 
