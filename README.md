@@ -68,25 +68,25 @@ This repository contains a full-stack deployment:
 
 ```text
 .
-├── src/                      # Frontend source
-│   ├── components/           # Auth/files/sharing/admin UI components
-│   ├── App.jsx               # Main application shell
-│   └── api.js                # Frontend API client
-├── backend/
-│   ├── app/
-│   │   ├── main.py           # FastAPI app entry + startup tasks
-│   │   ├── models.py         # SQLAlchemy models
-│   │   ├── schemas.py        # Pydantic schemas
-│   │   ├── auth.py           # Authentication helpers
-│   │   ├── storage.py        # Local storage service
-│   │   ├── thumbnails.py     # Thumbnail generation
-│   │   └── routers/          # Route modules
-│   ├── requirements.txt
-│   └── Dockerfile
-├── docker-compose.yml        # Full deployment stack
-├── Dockerfile                # Frontend image build
-├── nginx.conf                # Frontend server config
-└── .env.example              # Environment template
+|-- src/                      # Frontend source
+|   |-- components/           # Auth/files/sharing/admin UI components
+|   |-- App.jsx               # Main application shell
+|   `-- api.js                # Frontend API client
+|-- backend/
+|   |-- app/
+|   |   |-- main.py           # FastAPI app entry + startup tasks
+|   |   |-- models.py         # SQLAlchemy models
+|   |   |-- schemas.py        # Pydantic schemas
+|   |   |-- auth.py           # Authentication helpers
+|   |   |-- storage.py        # Local storage service
+|   |   |-- thumbnails.py     # Thumbnail generation
+|   |   `-- routers/          # Route modules
+|   |-- requirements.txt
+|   `-- Dockerfile
+|-- docker-compose.yml        # Full deployment stack
+|-- Dockerfile                # Frontend image build
+|-- nginx.conf                # Frontend server config
+`-- .env.example              # Environment template
 ```
 
 ## Quick start (Docker)
@@ -151,14 +151,14 @@ Frontend URL (default): `http://localhost:5173`
 
 Primary variables (root `.env`):
 
-- `SECRET_KEY` — JWT signing key (required)
-- `STORAGE_PATH` — host path for uploaded files
-- `DATA_PATH` — host path for SQLite data
-- `MAX_STORAGE_BYTES` — per-user quota (`0` = unlimited)
-- `ACCESS_TOKEN_EXPIRE_MINUTES` — token lifetime
-- `CORS_ORIGINS` — comma-separated allowed origins
-- `ALLOW_REGISTRATION` — `true` to allow public signups
-- `TUNNEL_TOKEN` — required only if using tunnel service
+- `SECRET_KEY` - JWT signing key (required)
+- `STORAGE_PATH` - host path for uploaded files
+- `DATA_PATH` - host path for SQLite data
+- `MAX_STORAGE_BYTES` - per-user quota (`0` = unlimited)
+- `ACCESS_TOKEN_EXPIRE_MINUTES` - token lifetime
+- `CORS_ORIGINS` - comma-separated allowed origins
+- `ALLOW_REGISTRATION` - `true` to allow public signups
+- `TUNNEL_TOKEN` - required only if using tunnel service
 
 See `backend/.env.example` for backend-specific defaults.
 
@@ -166,12 +166,12 @@ See `backend/.env.example` for backend-specific defaults.
 
 Main groups under `/api`:
 
-- `/api/auth` — authentication
-- `/api/files` — file operations, upload/download, thumbnails, trash
-- `/api/folders` — folder operations
-- `/api/storage` — storage stats, activity, trash cleanup
-- `/api/admin` — admin-only user/system endpoints
-- `/api/share` — share link create/access/revoke
+- `/api/auth` - authentication
+- `/api/files` - file operations, upload/download, thumbnails, trash
+- `/api/folders` - folder operations
+- `/api/storage` - storage stats, activity, trash cleanup
+- `/api/admin` - admin-only user/system endpoints
+- `/api/share` - share link create/access/revoke
 
 ## Security notes
 

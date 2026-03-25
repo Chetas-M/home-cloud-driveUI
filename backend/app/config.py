@@ -2,14 +2,14 @@
 Home Cloud Drive - Configuration Settings
 """
 from pydantic_settings import BaseSettings
-from pydantic import AliasChoices, field_validator
+from pydantic import field_validator
 from functools import lru_cache
 from typing import List
 
 
 class Settings(BaseSettings):
     # Security
-    # Security — no default! App will refuse to start without a real key.
+    # Security - no default! App will refuse to start without a real key.
     secret_key: str
 
     @field_validator('secret_key')
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
         for word in blocked:
             if word in v_lower:
                 raise ValueError(
-                    f"SECRET_KEY contains '{word}' — set a real key in .env "
+                    f"SECRET_KEY contains '{word}' - set a real key in .env "
                     f"(generate one with: openssl rand -hex 32)"
                 )
         if len(v) < 32:
@@ -61,7 +61,7 @@ class Settings(BaseSettings):
         """Parse CORS origins from comma-separated string"""
         return [origin.strip() for origin in self.cors_origins_str.split(',') if origin.strip()]
 
-    # Session last-seen throttle — only write last_seen_at if older than this many seconds.
+    # Session last-seen throttle - only write last_seen_at if older than this many seconds.
     # Reduces write amplification on busy deployments (set to 0 to always update).
     session_last_seen_update_interval_seconds: int = 60
 
@@ -104,3 +104,4 @@ class Settings(BaseSettings):
 @lru_cache()
 def get_settings() -> Settings:
     return Settings()
+
