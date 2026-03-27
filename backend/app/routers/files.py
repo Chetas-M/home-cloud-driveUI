@@ -4,6 +4,7 @@ Home Cloud Drive - Files Router
 import os
 import json
 import uuid
+import asyncio
 import aiofiles
 import mimetypes
 import unicodedata
@@ -474,7 +475,7 @@ async def complete_chunked_upload(
     # Clean up temp dir
     import shutil
     try:
-        shutil.rmtree(temp_dir)
+        await asyncio.to_thread(shutil.rmtree, temp_dir, ignore_errors=True)
     except Exception as e:
         print(f"Warning: Failed to cleanup temp dir {temp_dir}: {e}")
 
@@ -584,7 +585,8 @@ async def download_file(
     
     # Path traversal protection
     resolved = os.path.realpath(file.storage_path)
-    if not resolved.startswith(os.path.realpath(settings.storage_path)):
+    base_path = os.path.realpath(settings.storage_path)
+    if os.path.commonpath([base_path, resolved]) != base_path:
         raise HTTPException(status_code=403, detail="Access denied")
     
     # Log activity
@@ -659,7 +661,7 @@ async def copy_file(
 
     # Copy file on disk
     try:
-        shutil.copy2(original.storage_path, new_storage_path)
+        await asyncio.to_thread(shutil.copy2, original.storage_path, new_storage_path)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to copy file: {e}")
 
@@ -965,7 +967,8 @@ async def preview_file(
 
     # Path traversal protection
     resolved = os.path.realpath(file.storage_path)
-    if not resolved.startswith(os.path.realpath(settings.storage_path)):
+    base_path = os.path.realpath(settings.storage_path)
+    if os.path.commonpath([base_path, resolved]) != base_path:
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Get file size
@@ -986,6 +989,11 @@ async def preview_file(
             start = 0
             end = file_size - 1
 
+        if start >= file_size:
+            return StreamingResponse(
+                status_code=416,
+                headers={"Content-Range": f"bytes */{file_size}"}
+            )
         end = min(end, file_size - 1)
         content_length = end - start + 1
 
@@ -1060,7 +1068,8 @@ async def get_thumbnail(
     
     # Path traversal protection
     resolved = os.path.realpath(file.thumbnail_path)
-    if not resolved.startswith(os.path.realpath(settings.storage_path)):
+    base_path = os.path.realpath(settings.storage_path)
+    if os.path.commonpath([base_path, resolved]) != base_path:
         raise HTTPException(status_code=403, detail="Access denied")
     
     return FileResponse(

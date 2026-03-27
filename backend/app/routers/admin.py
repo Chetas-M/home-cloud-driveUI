@@ -4,6 +4,7 @@ Provides admin-only endpoints for user and system management.
 """
 import os
 import shutil
+import asyncio
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -164,7 +165,7 @@ async def delete_user(
     # Delete user's files from disk
     user_storage_path = os.path.join(settings.storage_path, user.id)
     if os.path.exists(user_storage_path):
-        shutil.rmtree(user_storage_path, ignore_errors=True)
+        await asyncio.to_thread(shutil.rmtree, user_storage_path, ignore_errors=True)
 
     # Delete user's activity logs
     await db.execute(

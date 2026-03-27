@@ -183,6 +183,7 @@ async def access_shared_file(
     }
 
 
+
 @router.get("/{token}/download")
 @limiter.limit("60/minute")
 async def download_shared_file(
@@ -224,7 +225,8 @@ async def download_shared_file(
 
     # Path traversal protection
     resolved = os.path.realpath(file.storage_path)
-    if not resolved.startswith(os.path.realpath(settings.storage_path)):
+    base_path = os.path.realpath(settings.storage_path)
+    if os.path.commonpath([base_path, resolved]) != base_path:
         raise HTTPException(status_code=403, detail="Access denied")
 
     # Increment download count atomically (SQL-level to prevent race conditions)
