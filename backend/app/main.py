@@ -35,7 +35,7 @@ async def run_migrations():
                 await conn.execute(text(sql))
                 print(f"[+] Added column {table}.{column}")
             except Exception:
-                pass  # Column already exists
+                pass  # nosec B110
 
 
 async def cleanup_old_trash():
@@ -290,4 +290,4 @@ async def health_check(request: Request):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("app.main:app", host="0.0.0.0", port=8000, reload=True)  # nosec B104

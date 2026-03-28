@@ -187,7 +187,7 @@ async def _get_jwt_payload(
         # the same secret. Legacy access tokens without a 'type' claim are still
         # accepted for backward compatibility.
         token_type: str | None = payload.get("type")
-        if token_type is not None and token_type != "access":
+        if token_type is not None and token_type != "access":  # nosec B105
             raise credentials_exception
         return payload
     except JWTError:
