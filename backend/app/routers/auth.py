@@ -2,7 +2,7 @@
 Home Cloud Drive - Authentication Router
 """
 from datetime import datetime, timedelta, timezone
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from anyio import to_thread
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Request, status
@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.auth import (
     authenticate_user,
+    build_password_reset_fingerprint,
     build_totp_uri,
     create_access_token,
     create_password_reset_token,
@@ -22,6 +23,7 @@ from app.auth import (
     get_session_by_id,
     get_user_by_email,
     get_user_by_username,
+    revoke_user_sessions,
     verify_password,
     verify_password_reset_token,
     verify_temporary_login_token,
@@ -76,24 +78,45 @@ async def send_login_alert_email_async(
 
 
 def build_password_reset_url(request: Request, token: str) -> str:
-    """Build the frontend password reset URL from config or the current request."""
+    """Build a password reset URL without trusting arbitrary request hosts."""
+    def normalize_origin(url: str) -> str | None:
+        parts = urlsplit(url)
+        if not parts.scheme or not parts.netloc:
+            return None
+        return f"{parts.scheme}://{parts.netloc}".lower()
+
+    def append_query_param(base_url: str, name: str, value: str) -> str:
+        parts = urlsplit(base_url)
+        query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if k != name]
+        query.append((name, value))
+        path = parts.path or "/"
+        return urlunsplit((parts.scheme, parts.netloc, path, urlencode(query), parts.fragment))
+
     if settings.password_reset_url:
-        base_url = settings.password_reset_url
-    else:
-        # Fallback to the server-controlled base URL derived from the request,
-        # and do not trust client-controlled headers like Origin.
-        base_url = str(request.base_url).rstrip("/")
-    return f"{urljoin(base_url.rstrip('/') + '/', '')}?reset_token={token}"
+        return append_query_param(settings.password_reset_url, "reset_token", token)
+
+    allowed_origins = [origin for origin in settings.cors_origins if normalize_origin(origin)]
+    request_origin = normalize_origin(str(request.base_url))
+    if request_origin and request_origin in {normalize_origin(origin) for origin in allowed_origins}:
+        return append_query_param(str(request.base_url), "reset_token", token)
+    if allowed_origins:
+        return append_query_param(allowed_origins[0], "reset_token", token)
+
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail="Password reset URL is not configured for this server",
+    )
 
 
 def get_client_ip(request: Request) -> str:
     """Extract the most useful client IP available for session tracking."""
-    forwarded_for = request.headers.get("x-forwarded-for")
-    if forwarded_for:
-        return forwarded_for.split(",")[0].strip()
-    real_ip = request.headers.get("x-real-ip")
-    if real_ip:
-        return real_ip.strip()
+    if settings.trust_proxy_headers:
+        forwarded_for = request.headers.get("x-forwarded-for")
+        if forwarded_for:
+            return forwarded_for.split(",")[0].strip()
+        real_ip = request.headers.get("x-real-ip")
+        if real_ip:
+            return real_ip.strip()
     if request.client and request.client.host:
         return request.client.host
     return "Unknown IP"
@@ -423,6 +446,7 @@ async def disable_two_factor(
 async def change_password(
     request: Request,
     data: PasswordChange,
+    current_session_id: str | None = Depends(get_current_session_id),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -437,6 +461,7 @@ async def change_password(
         )
 
     current_user.password_hash = get_password_hash(data.new_password)
+    await revoke_user_sessions(db, current_user.id, exclude_session_id=current_session_id)
     await db.flush()
 
     return {"detail": "Password changed successfully"}
@@ -459,7 +484,7 @@ async def forgot_password(
 
     user = await get_user_by_email(db, data.email)
     if user:
-        token = create_password_reset_token(user.id)
+        token = create_password_reset_token(user.id, user.password_hash)
         reset_url = build_password_reset_url(request, token)
         background_tasks.add_task(
             send_password_reset_email_async,
@@ -479,10 +504,17 @@ async def reset_password(
     db: AsyncSession = Depends(get_db),
 ):
     """Reset a user's password using a valid password reset token."""
-    user_id = verify_password_reset_token(data.token)
+    token_payload = verify_password_reset_token(data.token)
+    user_id = token_payload["user_id"]
 
     result = await db.get(User, user_id)
     if not result:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired password reset link",
+        )
+
+    if token_payload["password_fingerprint"] != build_password_reset_fingerprint(result.password_hash):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid or expired password reset link",
@@ -495,5 +527,6 @@ async def reset_password(
         )
 
     result.password_hash = get_password_hash(data.new_password)
+    await revoke_user_sessions(db, result.id)
 
     return {"detail": "Password reset successfully. You can now sign in."}
