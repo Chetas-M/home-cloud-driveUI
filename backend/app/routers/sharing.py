@@ -27,6 +27,29 @@ class ShareAccessRequest(BaseModel):
     password: Optional[str] = None
 
 
+async def reserve_share_download_slot(db: AsyncSession, link: ShareLink) -> None:
+    """Atomically consume one download slot when a capped link is used."""
+    statement = (
+        update(ShareLink)
+        .where(
+            ShareLink.id == link.id,
+            ShareLink.is_active.is_(True),
+        )
+        .values(download_count=ShareLink.download_count + 1)
+    )
+
+    if link.max_downloads is not None:
+        result = await db.execute(
+            statement.where(ShareLink.download_count < link.max_downloads)
+        )
+        if result.rowcount == 0:
+            raise HTTPException(status_code=410, detail="Download limit reached")
+    else:
+        await db.execute(statement)
+
+    await db.flush()
+
+
 @router.post("", response_model=ShareLinkResponse, status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def create_share_link(
@@ -59,10 +82,10 @@ async def create_share_link(
     if data.password:
         share_link.password_hash = get_password_hash(data.password)
 
-    if data.expires_in_hours:
+    if data.expires_in_hours is not None:
         share_link.expires_at = datetime.now(timezone.utc) + timedelta(hours=data.expires_in_hours)
 
-    if data.max_downloads:
+    if data.max_downloads is not None:
         share_link.max_downloads = data.max_downloads
 
     db.add(share_link)
@@ -229,13 +252,7 @@ async def download_shared_file(
     if os.path.commonpath([base_path, resolved]) != base_path:
         raise HTTPException(status_code=403, detail="Access denied")
 
-    # Increment download count atomically (SQL-level to prevent race conditions)
-    await db.execute(
-        update(ShareLink)
-        .where(ShareLink.id == link.id)
-        .values(download_count=ShareLink.download_count + 1)
-    )
-    await db.flush()
+    await reserve_share_download_slot(db, link)
 
     return FileResponse(
         path=file.storage_path,
