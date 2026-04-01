@@ -14,7 +14,7 @@ from app.database import get_db
 from app.limiter import limiter
 from app.models import User, File as FileModel, ActivityLog
 from app.schemas import AdminUserResponse, AdminUserUpdate, SystemStats, AdminPasswordReset
-from app.auth import get_admin_user, get_password_hash
+from app.auth import get_admin_user, get_password_hash, revoke_user_sessions
 from app.config import get_settings
 
 settings = get_settings()
@@ -199,6 +199,7 @@ async def reset_user_password(
         raise HTTPException(status_code=404, detail="User not found")
 
     user.password_hash = get_password_hash(data.new_password)
+    await revoke_user_sessions(db, user.id)
     await db.flush()
 
     return {"detail": f"Password reset for user '{user.username}'"}
