@@ -13,7 +13,7 @@ from passlib.context import CryptContext
 from fastapi import Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordBearer
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, update as sql_update
 
 from app.config import get_settings
 from app.database import get_db
@@ -82,13 +82,23 @@ def verify_temporary_login_token(token: str) -> str:
     return user_id
 
 
-def create_password_reset_token(user_id: str) -> str:
+def build_password_reset_fingerprint(password_hash: str) -> str:
+    """Bind password reset tokens to the user's current password hash."""
+    return hmac.new(
+        settings.secret_key.encode("utf-8"),
+        password_hash.encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+
+
+def create_password_reset_token(user_id: str, password_hash: str) -> str:
     """Create a short-lived password reset token for a user."""
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.password_reset_expire_minutes)
     payload = {
         "sub": user_id,
         "type": "password_reset",
         "exp": expire,
+        "prf": build_password_reset_fingerprint(password_hash),
     }
     return jwt.encode(payload, settings.secret_key, algorithm=settings.algorithm)
 
@@ -143,8 +153,8 @@ def verify_totp_code(secret: str, code: str, valid_window: int = 1) -> bool:
     return False
 
 
-def verify_password_reset_token(token: str) -> str:
-    """Validate a password reset token and return the user id."""
+def verify_password_reset_token(token: str) -> dict:
+    """Validate a password reset token and return its security claims."""
     try:
         payload = jwt.decode(token, settings.secret_key, algorithms=[settings.algorithm])
     except JWTError as exc:
@@ -160,13 +170,17 @@ def verify_password_reset_token(token: str) -> str:
         )
 
     user_id = payload.get("sub")
-    if not user_id:
+    password_fingerprint = payload.get("prf")
+    if not user_id or not password_fingerprint:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid password reset link",
         )
 
-    return user_id
+    return {
+        "user_id": user_id,
+        "password_fingerprint": password_fingerprint,
+    }
 
 
 async def _get_jwt_payload(
@@ -285,6 +299,28 @@ async def get_session_by_id(db: AsyncSession, session_id: str, user_id: str) -> 
         )
     )
     return result.scalar_one_or_none()
+
+
+async def revoke_user_sessions(
+    db: AsyncSession,
+    user_id: str,
+    *,
+    exclude_session_id: str | None = None,
+) -> None:
+    """Revoke active tracked sessions for a user."""
+    now = datetime.now(timezone.utc)
+    conditions = [
+        UserSession.user_id == user_id,
+        UserSession.revoked_at.is_(None),
+    ]
+    if exclude_session_id is not None:
+        conditions.append(UserSession.id != exclude_session_id)
+
+    await db.execute(
+        sql_update(UserSession)
+        .where(*conditions)
+        .values(revoked_at=now)
+    )
 
 
 async def get_admin_user(current_user: User = Depends(get_current_user)) -> User:
