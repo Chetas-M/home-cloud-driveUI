@@ -3,7 +3,7 @@ Home Cloud Drive - Pydantic Schemas
 """
 from pydantic import BaseModel, EmailStr, Field
 from datetime import datetime
-from typing import Optional, List
+from typing import Literal, Optional, List
 
 
 # ============ AUTH SCHEMAS ============
@@ -103,18 +103,18 @@ class FileBase(BaseModel):
     name: str
     type: str
     size: int = 0
-    path: List[str] = []
+    path: List[str] = Field(default_factory=list)
 
 
 class FileCreate(BaseModel):
     name: str
-    path: List[str] = []
+    path: List[str] = Field(default_factory=list)
 
 
 class ChunkedUploadInitRequest(BaseModel):
     filename: str
-    total_size: int
-    path: List[str] = []
+    total_size: int = Field(..., ge=0)
+    path: List[str] = Field(default_factory=list)
 
 
 class ChunkedUploadInitResponse(BaseModel):
@@ -125,8 +125,8 @@ class ChunkedUploadInitResponse(BaseModel):
 class ChunkedUploadCompleteRequest(BaseModel):
     upload_id: str
     filename: str
-    total_size: int
-    path: List[str] = []
+    total_size: int = Field(..., ge=0)
+    path: List[str] = Field(default_factory=list)
     mime_type: Optional[str] = None
 
 
@@ -161,7 +161,7 @@ class FileMoveRequest(BaseModel):
 
 class FolderCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
-    path: List[str] = []
+    path: List[str] = Field(default_factory=list)
 
 
 # ============ STORAGE SCHEMAS ============
@@ -228,10 +228,10 @@ class SystemStats(BaseModel):
 
 class ShareLinkCreate(BaseModel):
     file_id: str
-    permission: str = "view"  # view | download
+    permission: Literal["view", "download"] = "view"
     password: Optional[str] = None
-    expires_in_hours: Optional[int] = None
-    max_downloads: Optional[int] = None
+    expires_in_hours: Optional[int] = Field(None, ge=1, le=24 * 365)
+    max_downloads: Optional[int] = Field(None, ge=1)
 
 
 class ShareLinkResponse(BaseModel):
