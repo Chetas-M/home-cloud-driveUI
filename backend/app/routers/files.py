@@ -40,6 +40,8 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files", tags=["Files"])
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB chunks for streaming uploads
+RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024
+UPLOAD_METADATA_FILENAME = "upload.json"
 
 
 def sanitize_filename(filename: Optional[str]) -> str:
@@ -136,6 +138,75 @@ def get_serialized_path_prefixes(path: List[str]) -> List[str]:
 def normalize_path(path_json: str) -> str:
     """Normalize incoming path JSON for stable DB comparisons."""
     return serialize_path(parse_path(path_json or "[]"))
+
+
+def validate_upload_id(upload_id: str) -> str:
+    """Only accept server-generated UUID upload ids."""
+    try:
+        return str(uuid.UUID(upload_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invalid upload session") from exc
+
+
+def get_upload_temp_dir(user_id: str, upload_id: str) -> str:
+    return os.path.join(settings.storage_path, "tmp", user_id, upload_id)
+
+
+def get_upload_metadata_path(temp_dir: str) -> str:
+    return os.path.join(temp_dir, UPLOAD_METADATA_FILENAME)
+
+
+def get_expected_chunk_count(total_size: int, chunk_size: int) -> int:
+    return max(1, (total_size + chunk_size - 1) // chunk_size)
+
+
+def get_expected_chunk_size(total_size: int, chunk_size: int, chunk_index: int) -> int:
+    expected_chunks = get_expected_chunk_count(total_size, chunk_size)
+    if chunk_index < 0 or chunk_index >= expected_chunks:
+        raise HTTPException(status_code=400, detail="Chunk index is out of range for this upload")
+    if total_size == 0:
+        return 0
+    if chunk_index == expected_chunks - 1:
+        return total_size - (chunk_index * chunk_size)
+    return chunk_size
+
+
+async def write_upload_metadata(temp_dir: str, total_size: int, chunk_size: int) -> None:
+    metadata = {
+        "total_size": total_size,
+        "chunk_size": chunk_size,
+        "expected_chunks": get_expected_chunk_count(total_size, chunk_size),
+    }
+    async with aiofiles.open(get_upload_metadata_path(temp_dir), "w", encoding="utf-8") as handle:
+        await handle.write(json.dumps(metadata, separators=(",", ":")))
+
+
+async def read_upload_metadata(temp_dir: str) -> dict:
+    metadata_path = get_upload_metadata_path(temp_dir)
+    if not os.path.exists(metadata_path):
+        raise HTTPException(status_code=404, detail="Upload session not found or expired")
+
+    try:
+        async with aiofiles.open(metadata_path, "r", encoding="utf-8") as handle:
+            metadata = json.loads(await handle.read())
+    except (OSError, json.JSONDecodeError) as exc:
+        raise HTTPException(status_code=400, detail="Upload session metadata is invalid") from exc
+
+    try:
+        total_size = int(metadata["total_size"])
+        chunk_size = int(metadata["chunk_size"])
+        expected_chunks = int(metadata["expected_chunks"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail="Upload session metadata is invalid") from exc
+
+    if total_size < 0 or chunk_size <= 0 or expected_chunks != get_expected_chunk_count(total_size, chunk_size):
+        raise HTTPException(status_code=400, detail="Upload session metadata is invalid")
+
+    return {
+        "total_size": total_size,
+        "chunk_size": chunk_size,
+        "expected_chunks": expected_chunks,
+    }
 
 
 def to_file_response(file: FileModel) -> FileResponseSchema:
@@ -384,13 +455,14 @@ async def init_chunked_upload(
         )
 
     upload_id = str(uuid.uuid4())
-    temp_dir = os.path.join(settings.storage_path, "tmp", current_user.id, upload_id)
+    temp_dir = get_upload_temp_dir(current_user.id, upload_id)
     os.makedirs(temp_dir, exist_ok=True)
+    await write_upload_metadata(temp_dir, init_req.total_size, RESUMABLE_CHUNK_SIZE)
 
     # Return the upload_id and standard chunk size (e.g. 5 MB)
     return ChunkedUploadInitResponse(
         upload_id=upload_id,
-        chunk_size=5 * 1024 * 1024, # 5 MB chunks
+        chunk_size=RESUMABLE_CHUNK_SIZE,
     )
 
 
@@ -404,22 +476,49 @@ async def upload_chunk(
     current_user: User = Depends(get_current_user)
 ):
     """Upload a single chunk for a resumable upload."""
-    temp_dir = os.path.join(settings.storage_path, "tmp", current_user.id, upload_id)
+    upload_id = validate_upload_id(upload_id)
+    temp_dir = get_upload_temp_dir(current_user.id, upload_id)
     
     if not os.path.exists(temp_dir):
         raise HTTPException(status_code=404, detail="Upload session not found or expired")
 
+    metadata = await read_upload_metadata(temp_dir)
+    expected_chunk_size = get_expected_chunk_size(
+        metadata["total_size"],
+        metadata["chunk_size"],
+        chunk_index,
+    )
     chunk_filepath = os.path.join(temp_dir, f"chunk_{chunk_index}")
     
     try:
+        bytes_written = 0
         async with aiofiles.open(chunk_filepath, 'wb') as f:
             while True:
                 data = await file.read(CHUNK_SIZE)
                 if not data:
                     break
+                bytes_written += len(data)
+                if bytes_written > expected_chunk_size:
+                    raise HTTPException(status_code=400, detail="Chunk exceeds declared upload size")
                 await f.write(data)
+    except HTTPException:
+        if os.path.exists(chunk_filepath):
+            os.remove(chunk_filepath)
+        raise
     except Exception as e:
+        if os.path.exists(chunk_filepath):
+            os.remove(chunk_filepath)
         raise HTTPException(status_code=500, detail=f"Failed to save chunk: {e}")
+
+    uploaded_bytes = 0
+    for name in os.listdir(temp_dir):
+        if not name.startswith("chunk_"):
+            continue
+        uploaded_bytes += os.path.getsize(os.path.join(temp_dir, name))
+    if uploaded_bytes > metadata["total_size"]:
+        if os.path.exists(chunk_filepath):
+            os.remove(chunk_filepath)
+        raise HTTPException(status_code=400, detail="Uploaded chunks exceed declared file size")
 
     return {"status": "ok", "message": f"Chunk {chunk_index} received"}
 
@@ -433,10 +532,15 @@ async def complete_chunked_upload(
     db: AsyncSession = Depends(get_db)
 ):
     """Complete a chunked upload by assembling chunks into the final file."""
-    temp_dir = os.path.join(settings.storage_path, "tmp", current_user.id, complete_req.upload_id)
+    upload_id = validate_upload_id(complete_req.upload_id)
+    temp_dir = get_upload_temp_dir(current_user.id, upload_id)
     
     if not os.path.exists(temp_dir):
         raise HTTPException(status_code=404, detail="Upload session not found")
+
+    metadata = await read_upload_metadata(temp_dir)
+    if complete_req.total_size != metadata["total_size"]:
+        raise HTTPException(status_code=400, detail="Upload metadata does not match declared file size")
 
     user_storage_path = os.path.join(settings.storage_path, current_user.id)
     os.makedirs(user_storage_path, exist_ok=True)
@@ -447,11 +551,28 @@ async def complete_chunked_upload(
     storage_filename = f"{file_id}.{ext}" if ext else file_id
     final_storage_filepath = os.path.join(user_storage_path, storage_filename)
 
-    # Assemble chunks
-    # We need to find all chunk files, sort them numerically, and append them
-    chunk_files = [f for f in os.listdir(temp_dir) if f.startswith("chunk_")]
-    # Extract the integer index for proper sorting (chunk_0, chunk_1, chunk_2, ... chunk_10)
-    chunk_files.sort(key=lambda x: int(x.split("_")[1]))
+    chunk_indices = []
+    for name in os.listdir(temp_dir):
+        if not name.startswith("chunk_"):
+            continue
+        try:
+            chunk_indices.append(int(name.split("_", 1)[1]))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Upload session metadata is invalid") from exc
+
+    expected_indices = list(range(metadata["expected_chunks"]))
+    if sorted(chunk_indices) != expected_indices:
+        raise HTTPException(status_code=400, detail="Upload is incomplete")
+
+    chunk_files = [f"chunk_{index}" for index in expected_indices]
+    for index, chunk_filename in enumerate(chunk_files):
+        chunk_path = os.path.join(temp_dir, chunk_filename)
+        if os.path.getsize(chunk_path) != get_expected_chunk_size(
+            metadata["total_size"],
+            metadata["chunk_size"],
+            index,
+        ):
+            raise HTTPException(status_code=400, detail="Upload is incomplete")
 
     assembled_size = 0
     try:
@@ -480,11 +601,11 @@ async def complete_chunked_upload(
         print(f"Warning: Failed to cleanup temp dir {temp_dir}: {e}")
 
     # Verify size
-    if assembled_size != complete_req.total_size:
+    if assembled_size != metadata["total_size"]:
         os.remove(final_storage_filepath)
         raise HTTPException(
             status_code=400,
-            detail=f"Size mismatch: Expected {complete_req.total_size}, got {assembled_size}. File deleted."
+            detail=f"Size mismatch: Expected {metadata['total_size']}, got {assembled_size}. File deleted."
         )
 
     # Enforce maximum allowed file size on the assembled file
