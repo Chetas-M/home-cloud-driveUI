@@ -66,6 +66,27 @@
   padding: 0;
 }
 
+/* ---------- SELECT DROPDOWN FIX ---------- */
+select {
+  background-color: var(--bg-tertiary);
+  color: var(--text-primary);
+}
+
+select option {
+  background-color: var(--bg-secondary);
+  color: var(--text-primary);
+  padding: 8px 12px;
+}
+
+select option:checked {
+  background-color: var(--accent-blue);
+  color: #ffffff;
+}
+
+select option:hover {
+  background-color: var(--bg-tertiary);
+}
+
 html,
 body,
 #root {
