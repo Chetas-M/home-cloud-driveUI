@@ -38,6 +38,10 @@
   /* Border */
   --border-glass: 1px solid rgba(56, 189, 248, 0.12);
 
+  /* Surface */
+  --bg-surface: #151d2a;
+  --accent-primary: #38bdf8;
+
   /* Storage chart */
   --storage-ring-bg: rgba(255, 255, 255, 0.1);
 
