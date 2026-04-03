@@ -156,9 +156,18 @@ Primary variables (root `.env`):
 - `DATA_PATH` - host path for SQLite data
 - `MAX_STORAGE_BYTES` - per-user quota (`0` = unlimited)
 - `ACCESS_TOKEN_EXPIRE_MINUTES` - token lifetime
+- `PASSWORD_RESET_EXPIRE_MINUTES` - password reset token lifetime in minutes
 - `CORS_ORIGINS` - comma-separated allowed origins
 - `ALLOW_REGISTRATION` - `true` to allow public signups
+- `RESEND_API_KEY` - Resend API key used to send transactional emails
+- `RESEND_FROM_EMAIL` / `RESEND_FROM_NAME` - sender details shown on password reset emails
+- `RESEND_API_URL` - Resend send-email endpoint, defaults to `https://api.resend.com/emails`
+- `RESEND_TIMEOUT_SECONDS` - timeout for Resend API requests
+- `PASSWORD_RESET_URL` - public frontend reset page URL used in emailed reset links
 - `TUNNEL_TOKEN` - required only if using tunnel service
+
+For production deployments, set `PASSWORD_RESET_URL` to your public frontend reset page so emailed links always use the correct host.
+If you deploy with the root [`docker-compose.yml`](D:/New%20folder/rs/docker-compose.yml), these Resend and reset-link values must be present in the root `.env` because Compose injects them into the backend container.
 
 See `backend/.env.example` for backend-specific defaults.
 
