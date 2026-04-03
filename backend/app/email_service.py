@@ -43,7 +43,7 @@ def _send_email(recipient_email: str, subject: str, text_body: str, html_body: s
 
     try:
         with urllib_request.urlopen(req, timeout=settings.resend_timeout_seconds) as response:
-            if response.status not in (200, 201, 202):
+            if not 200 <= response.status < 300:
                 raise RuntimeError(f"Resend API rejected the email send with status {response.status}")
     except urllib_error.HTTPError as exc:
         error_body = exc.read().decode("utf-8", errors="replace")
