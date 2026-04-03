@@ -167,7 +167,7 @@ Primary variables (root `.env`):
 - `TUNNEL_TOKEN` - required only if using tunnel service
 
 For production deployments, set `PASSWORD_RESET_URL` to your public frontend reset page so emailed links always use the correct host.
-If you deploy with the root [`docker-compose.yml`](D:/New%20folder/rs/docker-compose.yml), these Resend and reset-link values must be present in the root `.env` because Compose injects them into the backend container.
+If you deploy with the root [`docker-compose.yml`](./docker-compose.yml), these Resend and reset-link values must be present in the root `.env` because Compose injects them into the backend container.
 
 See `backend/.env.example` for backend-specific defaults.
 
