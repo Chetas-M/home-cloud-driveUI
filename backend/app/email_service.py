@@ -1,10 +1,11 @@
 """
 Home Cloud Drive - Email utilities
 """
-import smtplib
-from email.message import EmailMessage
-import html
 from datetime import datetime
+import html
+import json
+from urllib import error as urllib_error
+from urllib import request as urllib_request
 
 from app.config import get_settings
 
@@ -12,47 +13,49 @@ settings = get_settings()
 
 
 def _send_email(recipient_email: str, subject: str, text_body: str, html_body: str) -> None:
-    """Send a transactional email through the configured SMTP server."""
-    if not settings.smtp_enabled:
-        raise RuntimeError("SMTP is not configured")
+    """Send a transactional email through the configured Resend API."""
+    if not settings.email_delivery_enabled:
+        raise RuntimeError("Resend email delivery is not configured")
 
-    message = EmailMessage()
-    message["Subject"] = subject
-    message["From"] = (
-        f"{settings.smtp_from_name} <{settings.smtp_from_email}>"
-        if settings.smtp_from_name
-        else settings.smtp_from_email
+    from_value = (
+        f"{settings.resend_from_name} <{settings.resend_from_email}>"
+        if settings.resend_from_name
+        else settings.resend_from_email
     )
-    message["To"] = recipient_email
+    payload = {
+        "from": from_value,
+        "to": [recipient_email],
+        "subject": subject,
+        "text": text_body,
+        "html": html_body,
+    }
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib_request.Request(
+        settings.resend_api_url,
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {settings.resend_api_key}",
+            "Content-Type": "application/json",
+            "User-Agent": "home-cloud/1.0",
+        },
+    )
 
-    message.set_content(text_body)
-    message.add_alternative(html_body, subtype="html")
-
-    if settings.smtp_use_ssl:
-        smtp = smtplib.SMTP_SSL(
-            settings.smtp_host,
-            settings.smtp_port,
-            timeout=settings.smtp_timeout_seconds,
-        )
-    else:
-        smtp = smtplib.SMTP(
-            settings.smtp_host,
-            settings.smtp_port,
-            timeout=settings.smtp_timeout_seconds,
-        )
-
-    with smtp as server:
-        if settings.smtp_use_tls:
-            server.starttls()
-        if settings.smtp_username:
-            server.login(settings.smtp_username, settings.smtp_password)
-        server.send_message(message)
+    try:
+        with urllib_request.urlopen(req, timeout=settings.resend_timeout_seconds) as response:
+            if not 200 <= response.status < 300:
+                raise RuntimeError(f"Resend API rejected the email send with status {response.status}")
+    except urllib_error.HTTPError as exc:
+        error_body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"Resend API request failed with status {exc.code}: {error_body}") from exc
+    except urllib_error.URLError as exc:
+        raise RuntimeError(f"Failed to reach Resend API: {exc.reason}") from exc
 
 
 def send_password_reset_email(recipient_email: str, username: str, reset_url: str) -> None:
     """Send a password reset email with a one-time reset link."""
     if not settings.password_reset_enabled:
-        raise RuntimeError("Password reset email is not configured")
+        raise RuntimeError("Password reset email delivery is not configured")
 
     text_body = (
         f"Hello {username},\n\n"

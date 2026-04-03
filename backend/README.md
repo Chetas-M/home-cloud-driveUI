@@ -97,14 +97,11 @@ Environment variables (in `.env`):
 | `MAX_STORAGE_BYTES` | `107374182400` (100GB) | Max storage per user |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` (24h) | Token expiration |
 | `PASSWORD_RESET_EXPIRE_MINUTES` | `30` | Password reset link expiration |
-| `SMTP_HOST` | - | SMTP host for password reset emails |
-| `SMTP_PORT` | `587` | SMTP port |
-| `SMTP_USERNAME` | - | SMTP username |
-| `SMTP_PASSWORD` | - | SMTP password |
-| `SMTP_FROM_EMAIL` | - | Sender address for password reset emails |
-| `SMTP_FROM_NAME` | `Home Cloud` | Sender display name |
-| `SMTP_USE_TLS` | `true` | Enable STARTTLS for SMTP |
-| `SMTP_USE_SSL` | `false` | Use implicit SSL instead of STARTTLS |
+| `RESEND_API_KEY` | - | Resend API key used for transactional email |
+| `RESEND_FROM_EMAIL` | - | Sender address for password reset emails |
+| `RESEND_FROM_NAME` | `Home Cloud` | Sender display name |
+| `RESEND_API_URL` | `https://api.resend.com/emails` | Resend send-email endpoint |
+| `RESEND_TIMEOUT_SECONDS` | `15` | Resend API timeout in seconds |
 | `PASSWORD_RESET_URL` | - | Optional frontend URL used in reset emails |
 
 ## Project Structure

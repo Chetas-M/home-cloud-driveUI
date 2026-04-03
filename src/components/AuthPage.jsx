@@ -24,6 +24,17 @@ export default function AuthPage({ onLogin }) {
     const isResetPassword = authMode === 'reset';
     const isTwoFactor = authMode === '2fa';
 
+    const isResetPath = () => window.location.pathname === '/reset-password';
+
+    const replaceAuthUrl = ({ resetPath = false, clearToken = false } = {}) => {
+        const url = new URL(window.location.href);
+        url.pathname = resetPath ? '/reset-password' : '/';
+        if (clearToken) {
+            url.searchParams.delete('reset_token');
+        }
+        window.history.replaceState({}, document.title, url.toString());
+    };
+
     useEffect(() => {
         const container = starsRef.current;
         if (!container) return;
@@ -74,14 +85,19 @@ export default function AuthPage({ onLogin }) {
             setAuthMode('reset');
             setError('');
             setMessage('Choose a new password for your account.');
-            clearUrlResetToken();
+            replaceAuthUrl({ resetPath: true, clearToken: true });
+            return;
+        }
+
+        if (isResetPath()) {
+            setAuthMode('reset');
+            setError('');
+            setMessage('Open the password reset link from your email to continue.');
         }
     }, []);
 
     const clearUrlResetToken = () => {
-        const url = new URL(window.location.href);
-        url.searchParams.delete('reset_token');
-        window.history.replaceState({}, document.title, url.toString());
+        replaceAuthUrl({ resetPath: isResetPath(), clearToken: true });
     };
 
     const resetToLogin = () => {
@@ -94,6 +110,7 @@ export default function AuthPage({ onLogin }) {
         setResetToken('');
         setShowPassword(false);
         setError('');
+        replaceAuthUrl({ resetPath: false, clearToken: true });
     };
 
     const handleModeChange = (mode) => {
@@ -106,7 +123,9 @@ export default function AuthPage({ onLogin }) {
         setShowPassword(false);
         if (mode !== 'reset') {
             setResetToken('');
-            clearUrlResetToken();
+            replaceAuthUrl({ resetPath: false, clearToken: true });
+        } else {
+            replaceAuthUrl({ resetPath: true, clearToken: true });
         }
         if (mode !== '2fa') {
             setTemporaryToken('');
@@ -144,6 +163,9 @@ export default function AuthPage({ onLogin }) {
                 const response = await api.requestPasswordReset(email);
                 setMessage(response.detail || 'If an account exists for that email, a reset link has been sent.');
             } else if (isResetPassword) {
+                if (!resetToken) {
+                    throw new Error('Open the password reset link from your email to continue');
+                }
                 if (password !== confirmPassword) {
                     throw new Error('Passwords do not match');
                 }

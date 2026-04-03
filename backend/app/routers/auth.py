@@ -195,7 +195,7 @@ async def create_user_session(
         expires_delta=timedelta(minutes=settings.access_token_expire_minutes),
     )
 
-    if settings.smtp_enabled and background_tasks is not None:
+    if settings.email_delivery_enabled and background_tasks is not None:
         background_tasks.add_task(
             send_login_alert_email_async,
             user.email,
@@ -477,9 +477,10 @@ async def forgot_password(
 ):
     """Send a password reset link to the user if reset email is configured."""
     if not settings.password_reset_enabled:
+        reason = settings.email_delivery_config_error or "Password reset email settings are incomplete"
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="Password reset email is not configured for this server",
+            detail=f"Password reset email delivery is not configured for this server. {reason}.",
         )
 
     user = await get_user_by_email(db, data.email)
