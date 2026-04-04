@@ -50,6 +50,15 @@ export default function Header({
     const [showMobileSearch, setShowMobileSearch] = useState(false);
     const userMenuRef = useRef(null);
 
+    const handleFileInputChange = (event, uploadHandler) => {
+        const { files } = event.target;
+        if (files?.length) {
+            uploadHandler(files);
+        }
+        // Allow re-selecting the same file/folder immediately after an upload.
+        event.target.value = "";
+    };
+
     // Close dropdown when clicking outside
     useEffect(() => {
         if (!showUserMenu) return;
@@ -207,7 +216,7 @@ export default function Header({
                             webkitdirectory=""
                             directory=""
                             multiple
-                            onChange={(e) => onUploadFolder(e.target.files)}
+                            onChange={(e) => handleFileInputChange(e, onUploadFolder)}
                         />
                     </label>
                 )}
@@ -221,7 +230,7 @@ export default function Header({
                             type="file"
                             multiple
                             hidden
-                            onChange={(e) => onUpload(e.target.files)}
+                            onChange={(e) => handleFileInputChange(e, onUpload)}
                         />
                     </label>
                 )}
