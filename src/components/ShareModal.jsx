@@ -65,6 +65,11 @@ export default function ShareModal({ file, onClose }) {
         setTimeout(() => setCopied(false), 2000);
     };
 
+    const handleUsePasswordChange = (e) => {
+        setUsePassword(e.target.checked);
+        if (!e.target.checked) setPassword('');
+    };
+
     const handleRevoke = async (linkId) => {
         try {
             await api.revokeShareLink(linkId);
@@ -130,7 +135,7 @@ export default function ShareModal({ file, onClose }) {
                         {/* Password */}
                         <div className="share-field">
                             <label className="share-checkbox-label">
-                                <input type="checkbox" checked={usePassword} onChange={e => { setUsePassword(e.target.checked); if (!e.target.checked) setPassword(''); }} />
+                                <input type="checkbox" checked={usePassword} onChange={handleUsePasswordChange} />
                                 <Lock size={14} /> Password protect
                             </label>
                             {usePassword && (
