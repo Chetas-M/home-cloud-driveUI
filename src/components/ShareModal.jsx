@@ -28,6 +28,13 @@ export default function ShareModal({ file, onClose }) {
     };
 
     const handleCreate = async () => {
+        const trimmedPassword = password.trim();
+
+        if (usePassword && !trimmedPassword) {
+            setError('Enter a password to protect this share link.');
+            return;
+        }
+
         try {
             setLoading(true);
             setError('');
@@ -35,12 +42,14 @@ export default function ShareModal({ file, onClose }) {
                 file_id: file.id,
                 permission,
             };
-            if (usePassword && password) data.password = password;
+            if (usePassword) data.password = trimmedPassword;
             if (expiresHours) data.expires_in_hours = parseInt(expiresHours);
             if (maxDownloads) data.max_downloads = parseInt(maxDownloads);
 
             const link = await api.createShareLink(data);
             setNewLink(link);
+            setPassword('');
+            setUsePassword(false);
             loadLinks();
         } catch (err) {
             setError(err.message);
@@ -54,6 +63,11 @@ export default function ShareModal({ file, onClose }) {
         navigator.clipboard.writeText(url);
         setCopied(true);
         setTimeout(() => setCopied(false), 2000);
+    };
+
+    const handleUsePasswordChange = (e) => {
+        setUsePassword(e.target.checked);
+        if (!e.target.checked) setPassword('');
     };
 
     const handleRevoke = async (linkId) => {
@@ -121,7 +135,7 @@ export default function ShareModal({ file, onClose }) {
                         {/* Password */}
                         <div className="share-field">
                             <label className="share-checkbox-label">
-                                <input type="checkbox" checked={usePassword} onChange={e => setUsePassword(e.target.checked)} />
+                                <input type="checkbox" checked={usePassword} onChange={handleUsePasswordChange} />
                                 <Lock size={14} /> Password protect
                             </label>
                             {usePassword && (
@@ -159,7 +173,11 @@ export default function ShareModal({ file, onClose }) {
                             </select>
                         </div>
 
-                        <button className="share-create-btn" onClick={handleCreate} disabled={loading}>
+                        <button
+                            className="share-create-btn"
+                            onClick={handleCreate}
+                            disabled={loading || (usePassword && !password.trim())}
+                        >
                             <Link2 size={16} />
                             {loading ? 'Creating...' : 'Create share link'}
                         </button>
