@@ -8,7 +8,7 @@ from sqlalchemy import select, func
 
 from app.database import get_db
 from app.limiter import limiter
-from app.models import User, File as FileModel, ActivityLog
+from app.models import User, File as FileModel, ActivityLog, FileVersion
 from app.schemas import StorageResponse, StorageBreakdown, ActivityResponse
 from app.auth import get_current_user
 from app.config import get_settings
@@ -45,6 +45,26 @@ async def get_storage_info(
             type=row[0],
             size=row[1] or 0,
             count=row[2] or 0,
+        ))
+
+    # Add archived version storage so totals reflect historical copies
+    version_stats = await db.execute(
+        select(
+            func.sum(FileVersion.size),
+            func.count(FileVersion.id)
+        )
+        .join(FileModel, FileVersion.file_id == FileModel.id)
+        .where(FileModel.owner_id == current_user.id)
+        .where(FileModel.is_trashed == False)
+        .where(FileModel.type != 'folder')
+        .where(FileVersion.version != FileModel.version)
+    )
+    version_sum, version_count = version_stats.first() or (0, 0)
+    if version_sum:
+        breakdown.append(StorageBreakdown(
+            type="versions",
+            size=version_sum or 0,
+            count=version_count or 0,
         ))
     
     # Get actual disk space from storage path
@@ -115,15 +135,35 @@ async def empty_trash(
     total_freed = 0
     
     for file in trashed_files:
-        # Delete from disk
-        if file.storage_path and os.path.exists(file.storage_path):
-            os.remove(file.storage_path)
+        versions_result = await db.execute(
+            select(FileVersion).where(FileVersion.file_id == file.id)
+        )
+        versions = versions_result.scalars().all()
+
+        if versions:
+            for version in versions:
+                if version.storage_path and os.path.exists(version.storage_path):
+                    try:
+                        os.remove(version.storage_path)
+                    except OSError:
+                        pass
+                total_freed += version.size or 0
+                await db.delete(version)
+        else:
+            if file.storage_path and os.path.exists(file.storage_path):
+                try:
+                    os.remove(file.storage_path)
+                except OSError:
+                    pass
+            total_freed += file.size or 0
         
         # Delete thumbnail from disk
         if file.thumbnail_path and os.path.exists(file.thumbnail_path):
-            os.remove(file.thumbnail_path)
+            try:
+                os.remove(file.thumbnail_path)
+            except OSError:
+                pass
         
-        total_freed += file.size
         await db.delete(file)
     
     # Update user storage

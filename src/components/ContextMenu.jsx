@@ -10,6 +10,7 @@ import {
     Copy,
     Info,
     Share2,
+    History,
 } from "lucide-react";
 
 export default function ContextMenu({
@@ -27,6 +28,7 @@ export default function ContextMenu({
     onTrash,
     onDetails,
     onShare,
+    onVersions,
 }) {
     const menuItems = [
         { icon: Eye, label: "Preview", action: onPreview, show: file.type !== "folder" },
@@ -38,6 +40,7 @@ export default function ContextMenu({
         { icon: Copy, label: "Make a copy", action: onCopy, show: file.type !== "folder" },
         { icon: Share2, label: "Share", action: onShare, show: file.type !== "folder" },
         { divider: true },
+        { icon: History, label: "Version history", action: onVersions, show: file.type !== "folder" },
         { icon: Info, label: "Details", action: onDetails },
         { icon: Trash2, label: "Move to Trash", action: onTrash, danger: true },
     ];

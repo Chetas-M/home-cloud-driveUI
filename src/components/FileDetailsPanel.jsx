@@ -13,6 +13,7 @@ import {
     Calendar,
     HardDrive,
     MapPin,
+    History,
 } from "lucide-react";
 
 const iconConfig = {
@@ -52,6 +53,7 @@ export default function FileDetailsPanel({
     onDownload,
     onStar,
     onTrash,
+    onShowVersions,
 }) {
     const Icon = iconConfig[file.type] || iconConfig.default;
 
@@ -104,6 +106,12 @@ export default function FileDetailsPanel({
                     <Trash2 size={18} />
                     <span>Trash</span>
                 </button>
+                {file.type !== "folder" && (
+                    <button className="details-action-btn" onClick={onShowVersions}>
+                        <History size={18} />
+                        <span>Versions</span>
+                    </button>
+                )}
             </div>
 
             {/* Metadata */}
@@ -120,7 +128,13 @@ export default function FileDetailsPanel({
                         <Calendar size={14} /> Modified
                     </span>
                     <span className="metadata-value">
-                        {formatDate(file.modifiedAt || file.createdAt)}
+                        {formatDate(
+                            file.updated_at ||
+                            file.updatedAt ||
+                            file.modifiedAt ||
+                            file.created_at ||
+                            file.createdAt
+                        )}
                     </span>
                 </div>
 
@@ -132,6 +146,14 @@ export default function FileDetailsPanel({
                         /{file.path.length > 0 ? file.path.join("/") : "Home"}
                     </span>
                 </div>
+                {file.type !== "folder" && (
+                    <div className="metadata-item">
+                        <span className="metadata-label">
+                            <History size={14} /> Version
+                        </span>
+                        <span className="metadata-value">v{file.version || 1}</span>
+                    </div>
+                )}
             </div>
         </div>
     );

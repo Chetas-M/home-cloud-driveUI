@@ -74,6 +74,7 @@ async def create_folder(
         size=0,
         path=serialize_path(folder.path),
         owner_id=current_user.id,
+        version=1,
     )
     
     db.add(new_folder)
@@ -98,6 +99,7 @@ async def create_folder(
         path=parse_path(new_folder.path),
         is_starred=new_folder.is_starred,
         is_trashed=new_folder.is_trashed,
+        version=new_folder.version or 1,
         created_at=new_folder.created_at,
         updated_at=new_folder.updated_at,
     )

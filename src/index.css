@@ -1251,6 +1251,10 @@ body {
   animation: scaleIn 0.25s ease;
 }
 
+.modal-content.wide {
+  max-width: 760px;
+}
+
 .modal-move {
   max-width: 500px;
 }
@@ -1266,6 +1270,16 @@ body {
   flex: 1;
   font-size: 1.1rem;
   font-weight: 600;
+}
+
+.modal-title-group {
+  flex: 1;
+}
+
+.modal-subtitle {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  margin-top: 2px;
 }
 
 .modal-icon {
@@ -1287,6 +1301,118 @@ body {
   cursor: pointer;
   border-radius: var(--radius-sm);
   transition: all var(--transition-fast);
+}
+
+.version-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--bg-primary);
+  border: var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  margin-bottom: 12px;
+}
+
+.version-label {
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
+.version-value {
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+
+.version-actions {
+  display: flex;
+  gap: 10px;
+}
+
+.version-error {
+  color: #f5576c;
+  margin-bottom: 8px;
+}
+
+.version-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.version-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  border: var(--border-glass);
+}
+
+.version-meta {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.version-badge {
+  background: var(--gradient-primary);
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+}
+
+.version-date {
+  font-weight: 600;
+}
+
+.version-size {
+  font-size: 0.9rem;
+  color: var(--text-muted);
+}
+
+.version-current {
+  background: rgba(16, 185, 129, 0.12);
+  color: #10b981;
+  padding: 4px 8px;
+  border-radius: var(--radius-sm);
+  font-size: 0.85rem;
+  border: 1px solid rgba(16, 185, 129, 0.35);
+}
+
+.version-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.version-buttons .btn-icon {
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-sm);
+  border: var(--border-glass);
+  background: transparent;
+  color: var(--text-primary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.version-buttons .btn-icon:hover {
+  background: rgba(56, 189, 248, 0.15);
+  color: var(--accent);
+}
+
+.version-buttons .btn-icon.danger {
+  color: #f5576c;
+  border-color: rgba(245, 87, 108, 0.3);
+}
+
+.version-buttons .btn-icon.danger:hover {
+  background: rgba(245, 87, 108, 0.12);
 }
 
 .modal-close:hover {

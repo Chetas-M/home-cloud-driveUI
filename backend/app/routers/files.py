@@ -14,13 +14,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, func
+from sqlalchemy.exc import IntegrityError
 import logging
 
 from app.database import get_db
 from app.limiter import limiter
-from app.models import User, File as FileModel, ActivityLog
-from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest, SearchResult
+from app.models import User, File as FileModel, ActivityLog, FileVersion
+from app.schemas import FileResponse as FileResponseSchema, FileUpdate, FileMoveRequest, SearchResult, FileVersionResponse
 from app.schemas import (
     FileResponse as FileResponseSchema, 
     FileUpdate, 
@@ -38,6 +39,9 @@ from app.thumbnails import generate_thumbnail, can_generate_thumbnail
 settings = get_settings()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files", tags=["Files"])
+
+# Maximum number of retries when a version-number unique-constraint violation is detected.
+_MAX_VERSION_RETRIES = 5
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB chunks for streaming uploads
 RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024
@@ -209,6 +213,79 @@ async def read_upload_metadata(temp_dir: str) -> dict:
     }
 
 
+async def get_next_version_number(db: AsyncSession, file_id: str) -> int:
+    result = await db.execute(
+        select(func.max(FileVersion.version)).where(FileVersion.file_id == file_id)
+    )
+    current_max = result.scalar()
+    return (current_max or 0) + 1
+
+
+async def ensure_base_version(file: FileModel, db: AsyncSession, owner_id: str) -> None:
+    """Create an initial version entry if none exists (for legacy rows)."""
+    if file.type == "folder":
+        return
+
+    existing_version = await db.execute(
+        select(FileVersion.id).where(FileVersion.file_id == file.id).limit(1)
+    )
+    if existing_version.scalar() is not None:
+        return
+
+    file.version = file.version or 1
+    base_version = FileVersion(
+        id=str(uuid.uuid4()),
+        file_id=file.id,
+        version=file.version,
+        size=file.size or 0,
+        mime_type=file.mime_type,
+        storage_path=file.storage_path or "",
+        created_at=file.created_at or datetime.now(timezone.utc),
+        created_by=owner_id,
+    )
+    db.add(base_version)
+    await db.flush()
+
+
+async def purge_file(db: AsyncSession, file: FileModel) -> int:
+    """Delete a file and all of its versions from disk and database.
+
+    Returns the total number of bytes freed for storage accounting.
+    """
+    freed_bytes = 0
+    versions_result = await db.execute(
+        select(FileVersion).where(FileVersion.file_id == file.id)
+    )
+    versions = versions_result.scalars().all()
+
+    if versions:
+        for version in versions:
+            if version.storage_path and os.path.exists(version.storage_path):
+                try:
+                    os.remove(version.storage_path)
+                except OSError:
+                    pass
+            freed_bytes += version.size or 0
+            await db.delete(version)
+    else:
+        # Legacy rows without versions — fall back to file.storage_path/size.
+        if file.storage_path and os.path.exists(file.storage_path):
+            try:
+                os.remove(file.storage_path)
+            except OSError:
+                pass
+        freed_bytes += file.size or 0
+
+    if file.thumbnail_path and os.path.exists(file.thumbnail_path):
+        try:
+            os.remove(file.thumbnail_path)
+        except OSError:
+            pass
+
+    await db.delete(file)
+    return freed_bytes
+
+
 def to_file_response(file: FileModel) -> FileResponseSchema:
     thumb_url = f"/api/files/{file.id}/thumbnail" if file.thumbnail_path else None
     return FileResponseSchema(
@@ -221,6 +298,7 @@ def to_file_response(file: FileModel) -> FileResponseSchema:
         is_starred=file.is_starred,
         is_trashed=file.is_trashed,
         thumbnail_url=thumb_url,
+        version=file.version or 1,
         created_at=file.created_at,
         updated_at=file.updated_at,
     )
@@ -407,11 +485,21 @@ async def upload_files(
             owner_id=current_user.id,
             is_starred=False,
             is_trashed=False,
+            version=1,
             created_at=now,
             updated_at=now,
         )
         
         db.add(new_file)
+        db.add(FileVersion(
+            file_id=file_id,
+            version=1,
+            size=file_size,
+            mime_type=mime_type,
+            storage_path=storage_filepath,
+            created_at=now,
+            created_by=current_user.id,
+        ))
         
         # Update user storage
         current_user.storage_used += file_size
@@ -647,11 +735,21 @@ async def complete_chunked_upload(
         owner_id=current_user.id,
         is_starred=False,
         is_trashed=False,
+        version=1,
         created_at=now,
         updated_at=now,
     )
     
     db.add(new_file)
+    db.add(FileVersion(
+        file_id=file_id,
+        version=1,
+        size=assembled_size,
+        mime_type=mime_type,
+        storage_path=final_storage_filepath,
+        created_at=now,
+        created_by=current_user.id,
+    ))
     current_user.storage_used += assembled_size
     
     activity = ActivityLog(
@@ -674,6 +772,7 @@ async def complete_chunked_upload(
         is_starred=new_file.is_starred,
         is_trashed=new_file.is_trashed,
         thumbnail_url=thumb_url,
+        version=new_file.version or 1,
         created_at=new_file.created_at,
         updated_at=new_file.updated_at,
     )
@@ -739,6 +838,405 @@ async def download_file(
     )
 
 
+@router.get("/{file_id}/versions", response_model=List[FileVersionResponse])
+@limiter.limit("60/minute")
+async def list_file_versions(
+    request: Request,
+    file_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return version history for a file."""
+    result = await db.execute(
+        select(FileModel).where(
+            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        )
+    )
+    file = result.scalar_one_or_none()
+
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    if file.type == "folder":
+        raise HTTPException(status_code=400, detail="Folders do not support version history")
+
+    await ensure_base_version(file, db, current_user.id)
+
+    versions_result = await db.execute(
+        select(FileVersion)
+        .where(FileVersion.file_id == file.id)
+        .order_by(FileVersion.version.desc())
+    )
+    versions = versions_result.scalars().all()
+
+    current_version = file.version or 1
+    return [
+        FileVersionResponse(
+            id=version.id,
+            version=version.version,
+            size=version.size,
+            mime_type=version.mime_type,
+            created_at=version.created_at,
+            is_current=(version.version == current_version or version.storage_path == file.storage_path),
+            created_by=version.created_by,
+        )
+        for version in versions
+    ]
+
+
+@router.post("/{file_id}/versions", response_model=FileResponseSchema, status_code=status.HTTP_201_CREATED)
+@limiter.limit("20/minute")
+async def upload_new_version(
+    request: Request,
+    file_id: str,
+    new_file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Upload a new version of an existing file."""
+    result = await db.execute(
+        select(FileModel).where(
+            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        )
+    )
+    file = result.scalar_one_or_none()
+
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    if file.type == "folder":
+        raise HTTPException(status_code=400, detail="Folders do not support versions")
+    if file.is_trashed:
+        raise HTTPException(status_code=400, detail="Restore the file before adding versions")
+
+    await ensure_base_version(file, db, current_user.id)
+
+    user_storage_path = os.path.join(settings.storage_path, current_user.id)
+    os.makedirs(user_storage_path, exist_ok=True)
+
+    safe_filename = sanitize_filename(new_file.filename or file.name)
+    ext = safe_filename.split('.')[-1] if '.' in safe_filename else ''
+    next_version = await get_next_version_number(db, file.id)
+    storage_filename = f"{file.id}_v{next_version}.{ext}" if ext else f"{file.id}_v{next_version}"
+    storage_filepath = os.path.join(user_storage_path, storage_filename)
+
+    file_size = 0
+    try:
+        async with aiofiles.open(storage_filepath, 'wb') as f:
+            while True:
+                chunk = await new_file.read(CHUNK_SIZE)
+                if not chunk:
+                    break
+                file_size += len(chunk)
+                if settings.max_file_size_bytes > 0 and file_size > settings.max_file_size_bytes:
+                    await f.close()
+                    os.remove(storage_filepath)
+                    raise HTTPException(
+                        status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                        detail=f"File exceeds max size of {settings.max_file_size_bytes} bytes"
+                    )
+                await f.write(chunk)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        if os.path.exists(storage_filepath):
+            os.remove(storage_filepath)
+        raise HTTPException(status_code=500, detail=f"Failed to save version: {exc}")
+
+    if current_user.storage_quota > 0 and current_user.storage_used + file_size > current_user.storage_quota:
+        os.remove(storage_filepath)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Storage quota exceeded. Available: {current_user.storage_quota - current_user.storage_used} bytes"
+        )
+
+    mime_type = new_file.content_type or mimetypes.guess_type(safe_filename)[0] or file.mime_type
+    thumb_path = None
+    if can_generate_thumbnail(safe_filename):
+        thumb_dir = os.path.join(user_storage_path, "thumbnails")
+        thumb_path = generate_thumbnail(storage_filepath, thumb_dir, f"{file.id}-v{next_version}")
+
+    # Clean up previous thumbnail whenever the stored path changes, including removal
+    if file.thumbnail_path and file.thumbnail_path != thumb_path and os.path.exists(file.thumbnail_path):
+        os.remove(file.thumbnail_path)
+
+    now = datetime.now(timezone.utc)
+    file.version = next_version
+    file.size = file_size
+    file.mime_type = mime_type
+    file.type = get_file_type(file.name, mime_type)
+    file.storage_path = storage_filepath
+    file.thumbnail_path = thumb_path
+    file.content_index = build_search_document(storage_filepath, file.name, mime_type, file.type)
+    file.updated_at = now
+
+    for _vretry in range(_MAX_VERSION_RETRIES):
+        try:
+            async with db.begin_nested():
+                db.add(FileVersion(
+                    file_id=file.id,
+                    version=next_version,
+                    size=file_size,
+                    mime_type=mime_type,
+                    storage_path=storage_filepath,
+                    created_at=now,
+                    created_by=current_user.id,
+                ))
+                await db.flush()
+            break
+        except IntegrityError:
+            if _vretry >= _MAX_VERSION_RETRIES - 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Version conflict; please retry the upload",
+                )
+            next_version = await get_next_version_number(db, file.id)
+            new_storage_filename = f"{file.id}_v{next_version}.{ext}" if ext else f"{file.id}_v{next_version}"
+            new_storage_filepath = os.path.join(user_storage_path, new_storage_filename)
+            os.rename(storage_filepath, new_storage_filepath)
+            storage_filepath = new_storage_filepath
+            file.version = next_version
+            file.storage_path = storage_filepath
+
+    current_user.storage_used += file_size
+
+    activity = ActivityLog(
+        user_id=current_user.id,
+        action="version_upload",
+        file_name=f"{file.name} v{next_version}",
+    )
+    db.add(activity)
+    await db.flush()
+    await db.refresh(file)
+    return to_file_response(file)
+
+
+@router.get("/{file_id}/versions/{version_id}/download")
+@limiter.limit("60/minute")
+async def download_version(
+    request: Request,
+    file_id: str,
+    version_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Download a specific version of a file."""
+    file_result = await db.execute(
+        select(FileModel).where(
+            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        )
+    )
+    file = file_result.scalar_one_or_none()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    version_result = await db.execute(
+        select(FileVersion).where(
+            and_(FileVersion.id == version_id, FileVersion.file_id == file.id)
+        )
+    )
+    version = version_result.scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if not version.storage_path or not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail="Version data missing")
+
+    resolved = os.path.realpath(version.storage_path)
+    base_path = os.path.realpath(settings.storage_path)
+    if os.path.commonpath([base_path, resolved]) != base_path:
+        raise HTTPException(status_code=403, detail="Access denied")
+
+    file_size = os.path.getsize(version.storage_path)
+    download_name = f"{file.name} (v{version.version})"
+
+    def iter_file():
+        with open(version.storage_path, "rb") as f:
+            while True:
+                chunk = f.read(65536)
+                if not chunk:
+                    break
+                yield chunk
+
+    return StreamingResponse(
+        iter_file(),
+        media_type=version.mime_type or file.mime_type or "application/octet-stream",
+        headers={
+            "Content-Length": str(file_size),
+            "Content-Disposition": build_content_disposition("attachment", download_name),
+        }
+    )
+
+
+@router.post("/{file_id}/versions/{version_id}/restore", response_model=FileResponseSchema)
+@limiter.limit("30/minute")
+async def restore_file_version(
+    request: Request,
+    file_id: str,
+    version_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Restore a previous version by creating a new latest version from it."""
+    file_result = await db.execute(
+        select(FileModel).where(
+            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        )
+    )
+    file = file_result.scalar_one_or_none()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+    if file.type == "folder":
+        raise HTTPException(status_code=400, detail="Folders do not support versions")
+    if file.is_trashed:
+        raise HTTPException(status_code=400, detail="Restore the file before restoring versions")
+
+    await ensure_base_version(file, db, current_user.id)
+
+    version_result = await db.execute(
+        select(FileVersion).where(
+            and_(FileVersion.id == version_id, FileVersion.file_id == file.id)
+        )
+    )
+    version = version_result.scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+    if not version.storage_path or not os.path.exists(version.storage_path):
+        raise HTTPException(status_code=404, detail="Version data missing")
+
+    if settings.max_file_size_bytes and version.size > settings.max_file_size_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Version exceeds maximum allowed size of {settings.max_file_size_bytes} bytes."
+        )
+
+    if current_user.storage_quota > 0 and current_user.storage_used + version.size > current_user.storage_quota:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Storage quota exceeded."
+        )
+
+    user_storage_path = os.path.join(settings.storage_path, current_user.id)
+    os.makedirs(user_storage_path, exist_ok=True)
+
+    next_version = await get_next_version_number(db, file.id)
+    ext = file.name.split('.')[-1] if '.' in file.name else ''
+    storage_filename = f"{file.id}_v{next_version}.{ext}" if ext else f"{file.id}_v{next_version}"
+    new_storage_path = os.path.join(user_storage_path, storage_filename)
+
+    import shutil
+    try:
+        await asyncio.to_thread(shutil.copy2, version.storage_path, new_storage_path)
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="Version data missing")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Failed to restore version: {exc}")
+
+    thumb_path = None
+    if can_generate_thumbnail(file.name):
+        thumb_dir = os.path.join(user_storage_path, "thumbnails")
+        thumb_path = generate_thumbnail(new_storage_path, thumb_dir, f"{file.id}-v{next_version}")
+
+    if file.thumbnail_path and file.thumbnail_path != thumb_path and os.path.exists(file.thumbnail_path):
+        os.remove(file.thumbnail_path)
+
+    now = datetime.now(timezone.utc)
+    file.version = next_version
+    file.size = version.size
+    file.mime_type = version.mime_type
+    file.type = get_file_type(file.name, version.mime_type)
+    file.storage_path = new_storage_path
+    file.thumbnail_path = thumb_path
+    file.updated_at = now
+
+    for _vretry in range(_MAX_VERSION_RETRIES):
+        try:
+            async with db.begin_nested():
+                db.add(FileVersion(
+                    file_id=file.id,
+                    version=next_version,
+                    size=version.size,
+                    mime_type=version.mime_type,
+                    storage_path=new_storage_path,
+                    created_at=now,
+                    created_by=current_user.id,
+                ))
+                await db.flush()
+            break
+        except IntegrityError:
+            if _vretry >= _MAX_VERSION_RETRIES - 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Version conflict; please retry",
+                )
+            next_version = await get_next_version_number(db, file.id)
+            new_storage_filename = f"{file.id}_v{next_version}.{ext}" if ext else f"{file.id}_v{next_version}"
+            updated_storage_path = os.path.join(user_storage_path, new_storage_filename)
+            os.rename(new_storage_path, updated_storage_path)
+            new_storage_path = updated_storage_path
+            file.version = next_version
+            file.storage_path = new_storage_path
+
+    # Build the content index once using the final storage path (after any retries).
+    file.content_index = build_search_document(new_storage_path, file.name, version.mime_type, file.type)
+
+    current_user.storage_used += version.size
+    activity = ActivityLog(
+        user_id=current_user.id,
+        action="version_restore",
+        file_name=f"{file.name} v{next_version}",
+    )
+    db.add(activity)
+
+    await db.flush()
+    await db.refresh(file)
+    return to_file_response(file)
+
+
+@router.delete("/{file_id}/versions/{version_id}", status_code=status.HTTP_204_NO_CONTENT)
+@limiter.limit("30/minute")
+async def delete_file_version(
+    request: Request,
+    file_id: str,
+    version_id: str,
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a specific historical version."""
+    file_result = await db.execute(
+        select(FileModel).where(
+            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        )
+    )
+    file = file_result.scalar_one_or_none()
+    if not file:
+        raise HTTPException(status_code=404, detail="File not found")
+
+    version_result = await db.execute(
+        select(FileVersion).where(
+            and_(FileVersion.id == version_id, FileVersion.file_id == file.id)
+        )
+    )
+    version = version_result.scalar_one_or_none()
+    if not version:
+        raise HTTPException(status_code=404, detail="Version not found")
+
+    if version.version == (file.version or 1):
+        raise HTTPException(status_code=400, detail="Cannot delete the current version")
+
+    if version.storage_path and os.path.exists(version.storage_path):
+        try:
+            os.remove(version.storage_path)
+        except OSError:
+            pass
+
+    freed = version.size or 0
+    await db.delete(version)
+    current_user.storage_used = max(0, current_user.storage_used - freed)
+    activity = ActivityLog(
+        user_id=current_user.id,
+        action="version_delete",
+        file_name=f"{file.name} v{version.version}",
+    )
+    db.add(activity)
+    await db.flush()
 @router.post("/{file_id}/copy", response_model=FileResponseSchema, status_code=status.HTTP_201_CREATED)
 @limiter.limit("20/minute")
 async def copy_file(
@@ -815,11 +1313,21 @@ async def copy_file(
         owner_id=current_user.id,
         is_starred=False,
         is_trashed=False,
+        version=1,
         created_at=now,
         updated_at=now,
     )
 
     db.add(new_file)
+    db.add(FileVersion(
+        file_id=new_id,
+        version=1,
+        size=original.size,
+        mime_type=original.mime_type,
+        storage_path=new_storage_path,
+        created_at=now,
+        created_by=current_user.id,
+    ))
     current_user.storage_used += original.size
 
     # Log activity
@@ -1016,6 +1524,8 @@ async def delete_file_permanently(
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
     
+    freed_bytes = 0
+
     # If folder, recursively delete all children first
     if file.type == "folder":
         folder_path = parse_path(file.path) + [file.name]
@@ -1029,31 +1539,10 @@ async def delete_file_permanently(
             )
         )
         for child in children_result.scalars().all():
-            # Delete child's disk file
-            if child.storage_path and os.path.exists(child.storage_path):
-                os.remove(child.storage_path)
-            # Delete child's thumbnail
-            if child.thumbnail_path and os.path.exists(child.thumbnail_path):
-                os.remove(child.thumbnail_path)
-            # Update storage
-            current_user.storage_used -= child.size
-            await db.delete(child)
-    
-    # Delete the file/folder itself from disk
-    if file.storage_path and os.path.exists(file.storage_path):
-        os.remove(file.storage_path)
-    
-    # Delete thumbnail if exists
-    if file.thumbnail_path and os.path.exists(file.thumbnail_path):
-        os.remove(file.thumbnail_path)
-    
-    # Update user storage
-    current_user.storage_used -= file.size
-    if current_user.storage_used < 0:
-        current_user.storage_used = 0
-    
-    # Delete from database
-    await db.delete(file)
+            freed_bytes += await purge_file(db, child)
+
+    freed_bytes += await purge_file(db, file)
+    current_user.storage_used = max(0, current_user.storage_used - freed_bytes)
     await db.flush()
 
 
