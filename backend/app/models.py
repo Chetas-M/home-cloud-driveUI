@@ -1,7 +1,7 @@
 """
 Home Cloud Drive - SQLAlchemy Models
 """
-from sqlalchemy import Column, String, Integer, Boolean, DateTime, ForeignKey, Text, BigInteger
+from sqlalchemy import Column, String, Integer, Boolean, DateTime, ForeignKey, Text, BigInteger, UniqueConstraint
 from sqlalchemy.orm import relationship
 from datetime import datetime, timezone
 import uuid
@@ -72,6 +72,9 @@ class File(Base):
 
 class FileVersion(Base):
     __tablename__ = "file_versions"
+    __table_args__ = (
+        UniqueConstraint("file_id", "version", name="uq_file_versions_file_id_version"),
+    )
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     file_id = Column(String(36), ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True)

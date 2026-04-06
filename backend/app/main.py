@@ -38,6 +38,16 @@ async def run_migrations():
             except Exception:
                 pass  # nosec B110
 
+        # Ensure the unique index on (file_id, version) exists for existing databases
+        try:
+            await conn.execute(text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_file_versions_file_id_version "
+                "ON file_versions (file_id, version)"
+            ))
+            print("[+] Ensured unique index on file_versions(file_id, version)")
+        except Exception:
+            pass  # nosec B110
+
 
 async def cleanup_old_trash():
     """Auto-delete files that have been in trash longer than trash_auto_delete_days."""
