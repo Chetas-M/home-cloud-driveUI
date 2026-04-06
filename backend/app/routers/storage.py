@@ -55,6 +55,8 @@ async def get_storage_info(
         )
         .join(FileModel, FileVersion.file_id == FileModel.id)
         .where(FileModel.owner_id == current_user.id)
+        .where(FileModel.is_trashed == False)
+        .where(FileModel.type != 'folder')
         .where(FileVersion.version != FileModel.version)
     )
     version_sum, version_count = version_stats.first() or (0, 0)
