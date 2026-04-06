@@ -15,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File,
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, or_, func
+from sqlalchemy.exc import IntegrityError
 import logging
 
 from app.database import get_db
@@ -38,6 +39,9 @@ from app.thumbnails import generate_thumbnail, can_generate_thumbnail
 settings = get_settings()
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/files", tags=["Files"])
+
+# Maximum number of retries when a version-number unique-constraint violation is detected.
+_MAX_VERSION_RETRIES = 5
 
 CHUNK_SIZE = 1024 * 1024  # 1 MB chunks for streaming uploads
 RESUMABLE_CHUNK_SIZE = 5 * 1024 * 1024
@@ -960,15 +964,33 @@ async def upload_new_version(
     file.content_index = build_search_document(storage_filepath, file.name, mime_type, file.type)
     file.updated_at = now
 
-    db.add(FileVersion(
-        file_id=file.id,
-        version=next_version,
-        size=file_size,
-        mime_type=mime_type,
-        storage_path=storage_filepath,
-        created_at=now,
-        created_by=current_user.id,
-    ))
+    for _vretry in range(_MAX_VERSION_RETRIES):
+        try:
+            async with db.begin_nested():
+                db.add(FileVersion(
+                    file_id=file.id,
+                    version=next_version,
+                    size=file_size,
+                    mime_type=mime_type,
+                    storage_path=storage_filepath,
+                    created_at=now,
+                    created_by=current_user.id,
+                ))
+                await db.flush()
+            break
+        except IntegrityError:
+            if _vretry >= _MAX_VERSION_RETRIES - 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Version conflict; please retry the upload",
+                )
+            next_version = await get_next_version_number(db, file.id)
+            new_storage_filename = f"{file.id}_v{next_version}.{ext}" if ext else f"{file.id}_v{next_version}"
+            new_storage_filepath = os.path.join(user_storage_path, new_storage_filename)
+            os.rename(storage_filepath, new_storage_filepath)
+            storage_filepath = new_storage_filepath
+            file.version = next_version
+            file.storage_path = storage_filepath
 
     current_user.storage_used += file_size
 
@@ -1121,15 +1143,34 @@ async def restore_file_version(
     file.content_index = build_search_document(new_storage_path, file.name, version.mime_type, file.type)
     file.updated_at = now
 
-    db.add(FileVersion(
-        file_id=file.id,
-        version=next_version,
-        size=version.size,
-        mime_type=version.mime_type,
-        storage_path=new_storage_path,
-        created_at=now,
-        created_by=current_user.id,
-    ))
+    for _vretry in range(_MAX_VERSION_RETRIES):
+        try:
+            async with db.begin_nested():
+                db.add(FileVersion(
+                    file_id=file.id,
+                    version=next_version,
+                    size=version.size,
+                    mime_type=version.mime_type,
+                    storage_path=new_storage_path,
+                    created_at=now,
+                    created_by=current_user.id,
+                ))
+                await db.flush()
+            break
+        except IntegrityError:
+            if _vretry >= _MAX_VERSION_RETRIES - 1:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Version conflict; please retry",
+                )
+            next_version = await get_next_version_number(db, file.id)
+            new_storage_filename = f"{file.id}_v{next_version}.{ext}" if ext else f"{file.id}_v{next_version}"
+            new_new_storage_path = os.path.join(user_storage_path, new_storage_filename)
+            os.rename(new_storage_path, new_new_storage_path)
+            new_storage_path = new_new_storage_path
+            file.version = next_version
+            file.storage_path = new_storage_path
+            file.content_index = build_search_document(new_storage_path, file.name, version.mime_type, file.type)
 
     current_user.storage_used += version.size
     activity = ActivityLog(

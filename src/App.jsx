@@ -543,7 +543,7 @@ export default function App() {
             document.body.removeChild(a);
             setTimeout(() => URL.revokeObjectURL(url), 10000);
         } catch (err) {
-            console.error("Download failed:", err);
+            setVersionError(err.message || "Download failed");
         }
     };
 
