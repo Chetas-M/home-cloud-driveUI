@@ -18,6 +18,7 @@ import AuthPage from "./components/AuthPage";
 import AdminPanel from "./components/AdminPanel";
 import ShareModal from "./components/ShareModal";
 import SecurityModal from "./components/SecurityModal";
+import VersionHistoryModal from "./components/VersionHistoryModal";
 import api from "./api";
 
 export default function App() {
@@ -68,6 +69,10 @@ export default function App() {
     const [moveFile, setMoveFile] = useState(null);
     const [shareFile, setShareFile] = useState(null);
     const [showSecurityModal, setShowSecurityModal] = useState(false);
+    const [versionFile, setVersionFile] = useState(null);
+    const [versions, setVersions] = useState([]);
+    const [versionsLoading, setVersionsLoading] = useState(false);
+    const [versionError, setVersionError] = useState("");
 
     /* ---------------- AUTH CHECK ---------------- */
     useEffect(() => {
@@ -453,6 +458,99 @@ export default function App() {
         } catch (err) {
             console.error("Download failed:", err);
         }
+    };
+
+    /* ---------------- VERSIONS ---------------- */
+    const loadVersions = useCallback(async (file) => {
+        setVersionFile(file);
+        setVersionsLoading(true);
+        setVersionError("");
+        try {
+            const data = await api.listVersions(file.id);
+            setVersions(data);
+        } catch (err) {
+            setVersionError(err.message || "Failed to load versions");
+            setVersions([]);
+        } finally {
+            setVersionsLoading(false);
+        }
+    }, []);
+
+    const handleUploadVersion = async (fileBlob) => {
+        if (!versionFile || !fileBlob) return;
+        setVersionsLoading(true);
+        setVersionError("");
+        try {
+            const updatedFile = await api.uploadVersion(versionFile.id, fileBlob);
+            setVersionFile(updatedFile);
+            await loadFiles();
+            const data = await api.listVersions(versionFile.id);
+            setVersions(data);
+            await loadExtra();
+        } catch (err) {
+            setVersionError(err.message || "Failed to upload version");
+        } finally {
+            setVersionsLoading(false);
+        }
+    };
+
+    const handleRestoreVersion = async (versionId) => {
+        if (!versionFile) return;
+        setVersionsLoading(true);
+        setVersionError("");
+        try {
+            const updatedFile = await api.restoreVersion(versionFile.id, versionId);
+            setVersionFile(updatedFile);
+            await loadFiles();
+            const data = await api.listVersions(versionFile.id);
+            setVersions(data);
+            await loadExtra();
+        } catch (err) {
+            setVersionError(err.message || "Failed to restore version");
+        } finally {
+            setVersionsLoading(false);
+        }
+    };
+
+    const handleDeleteVersion = async (versionId) => {
+        if (!versionFile) return;
+        if (!confirm("Delete this version? This cannot be undone.")) return;
+        setVersionsLoading(true);
+        setVersionError("");
+        try {
+            await api.deleteVersion(versionFile.id, versionId);
+            const data = await api.listVersions(versionFile.id);
+            setVersions(data);
+            await loadExtra();
+        } catch (err) {
+            setVersionError(err.message || "Failed to delete version");
+        } finally {
+            setVersionsLoading(false);
+        }
+    };
+
+    const handleDownloadVersion = async (version) => {
+        if (!versionFile) return;
+        try {
+            const blob = await api.downloadVersion(versionFile.id, version.id);
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.href = url;
+            a.download = `${versionFile.name} (v${version.version})`;
+            a.style.display = "none";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            setTimeout(() => URL.revokeObjectURL(url), 10000);
+        } catch (err) {
+            console.error("Download failed:", err);
+        }
+    };
+
+    const closeVersionModal = () => {
+        setVersionFile(null);
+        setVersions([]);
+        setVersionError("");
     };
 
     /* ---------------- CREATE FOLDER ---------------- */
@@ -947,6 +1045,7 @@ export default function App() {
                     onDownload={downloadFile}
                     onStar={handleStar}
                     onTrash={handleTrash}
+                    onShowVersions={() => loadVersions(detailsFile)}
                 />
             )}
 
@@ -967,6 +1066,7 @@ export default function App() {
                     onTrash={() => handleTrash(contextMenu.file.id)}
                     onDetails={() => setDetailsFile(contextMenu.file)}
                     onShare={() => setShareFile(contextMenu.file)}
+                    onVersions={() => loadVersions(contextMenu.file)}
                 />
             )}
 
@@ -1014,6 +1114,20 @@ export default function App() {
                 <ShareModal
                     file={shareFile}
                     onClose={() => setShareFile(null)}
+                />
+            )}
+
+            {versionFile && (
+                <VersionHistoryModal
+                    file={versionFile}
+                    versions={versions}
+                    loading={versionsLoading}
+                    error={versionError}
+                    onClose={closeVersionModal}
+                    onUpload={handleUploadVersion}
+                    onRestore={handleRestoreVersion}
+                    onDelete={handleDeleteVersion}
+                    onDownload={handleDownloadVersion}
                 />
             )}
 

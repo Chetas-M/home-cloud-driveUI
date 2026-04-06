@@ -409,6 +409,45 @@ class ApiService {
         return response.blob();
     }
 
+    async downloadVersion(fileId, versionId) {
+        const response = await fetch(`${API_BASE_URL}/files/${fileId}/versions/${versionId}/download`, {
+            headers: {
+                'Authorization': `Bearer ${this.getToken()}`,
+            },
+        });
+
+        if (!response.ok) {
+            throw new Error('Download failed');
+        }
+
+        return response.blob();
+    }
+
+    async listVersions(fileId) {
+        return this.request(`/files/${fileId}/versions`);
+    }
+
+    async uploadVersion(fileId, file) {
+        const formData = new FormData();
+        formData.append('new_file', file);
+        return this.request(`/files/${fileId}/versions`, {
+            method: 'POST',
+            body: formData,
+        });
+    }
+
+    async restoreVersion(fileId, versionId) {
+        return this.request(`/files/${fileId}/versions/${versionId}/restore`, {
+            method: 'POST',
+        });
+    }
+
+    async deleteVersion(fileId, versionId) {
+        return this.request(`/files/${fileId}/versions/${versionId}`, {
+            method: 'DELETE',
+        });
+    }
+
     async updateFile(fileId, updates) {
         return this.request(`/files/${fileId}`, {
             method: 'PATCH',

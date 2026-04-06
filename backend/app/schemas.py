@@ -140,6 +140,7 @@ class FileResponse(BaseModel):
     is_starred: bool
     is_trashed: bool
     thumbnail_url: Optional[str] = None
+    version: int = 1
     created_at: datetime
     updated_at: datetime
 
@@ -155,6 +156,19 @@ class FileUpdate(BaseModel):
 
 class FileMoveRequest(BaseModel):
     new_path: List[str]
+
+
+class FileVersionResponse(BaseModel):
+    id: str
+    version: int
+    size: int
+    mime_type: Optional[str] = None
+    created_at: datetime
+    is_current: bool = False
+    created_by: Optional[str] = None
+
+    class Config:
+        from_attributes = True
 
 
 # ============ FOLDER SCHEMAS ============

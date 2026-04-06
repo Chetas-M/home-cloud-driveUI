@@ -49,6 +49,7 @@ class File(Base):
     size = Column(BigInteger, default=0)  # bytes
     path = Column(Text, default="[]")  # JSON array of folder names
     storage_path = Column(String(500), nullable=True)  # actual file path on disk
+    version = Column(Integer, default=1)
     
     # Search & thumbnails
     content_index = Column(Text, nullable=True)  # extracted text for full-text search
@@ -57,6 +58,7 @@ class File(Base):
     # Ownership
     owner_id = Column(String(36), ForeignKey("users.id"), nullable=False)
     owner = relationship("User", back_populates="files")
+    versions = relationship("FileVersion", back_populates="file", cascade="all, delete-orphan", order_by="FileVersion.version")
     
     # Status flags
     is_starred = Column(Boolean, default=False)
@@ -66,6 +68,22 @@ class File(Base):
     # Timestamps
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+
+class FileVersion(Base):
+    __tablename__ = "file_versions"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    file_id = Column(String(36), ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True)
+    version = Column(Integer, nullable=False)
+    size = Column(BigInteger, default=0)
+    mime_type = Column(String(100), nullable=True)
+    storage_path = Column(String(500), nullable=False)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_by = Column(String(36), ForeignKey("users.id"), nullable=False)
+
+    file = relationship("File", back_populates="versions")
+    owner = relationship("User")
 
 
 class ShareLink(Base):

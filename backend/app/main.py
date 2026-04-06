@@ -27,6 +27,7 @@ async def run_migrations():
         ("users", "two_factor_pending_secret", "ALTER TABLE users ADD COLUMN two_factor_pending_secret VARCHAR(64)"),
         ("files", "content_index", "ALTER TABLE files ADD COLUMN content_index TEXT"),
         ("files", "thumbnail_path", "ALTER TABLE files ADD COLUMN thumbnail_path VARCHAR(500)"),
+        ("files", "version", "ALTER TABLE files ADD COLUMN version INTEGER DEFAULT 1"),
     ]
     
     async with engine.begin() as conn:
@@ -43,7 +44,7 @@ async def cleanup_old_trash():
     from datetime import datetime, timedelta, timezone
     from sqlalchemy import select, and_
     from app.database import async_session
-    from app.models import File as FileModel, User
+    from app.models import File as FileModel, User, FileVersion
     
     days = settings.trash_auto_delete_days
     if days <= 0:
@@ -72,14 +73,37 @@ async def cleanup_old_trash():
         deleted_count = 0
         
         for file in old_files:
-            # Delete disk file
-            if file.storage_path and os.path.exists(file.storage_path):
-                os.remove(file.storage_path)
+            freed = 0
+            versions_result = await db.execute(
+                select(FileVersion).where(FileVersion.file_id == file.id)
+            )
+            versions = versions_result.scalars().all()
+
+            if versions:
+                for version in versions:
+                    if version.storage_path and os.path.exists(version.storage_path):
+                        try:
+                            os.remove(version.storage_path)
+                        except OSError:
+                            pass
+                    freed += version.size or 0
+                    await db.delete(version)
+            else:
+                if file.storage_path and os.path.exists(file.storage_path):
+                    try:
+                        os.remove(file.storage_path)
+                    except OSError:
+                        pass
+                freed += file.size or 0
+
             # Delete thumbnail
             if file.thumbnail_path and os.path.exists(file.thumbnail_path):
-                os.remove(file.thumbnail_path)
+                try:
+                    os.remove(file.thumbnail_path)
+                except OSError:
+                    pass
             
-            owner_freed[file.owner_id] = owner_freed.get(file.owner_id, 0) + file.size
+            owner_freed[file.owner_id] = owner_freed.get(file.owner_id, 0) + freed
             await db.delete(file)
             deleted_count += 1
         
