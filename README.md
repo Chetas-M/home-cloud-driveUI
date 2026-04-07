@@ -167,9 +167,17 @@ Primary variables (root `.env`):
 - `TUNNEL_TOKEN` - required only if using tunnel service
 
 For production deployments, set `PASSWORD_RESET_URL` to your public frontend reset page so emailed links always use the correct host.
+Use the full frontend reset route, for example `https://cloud.example.com/reset-password`, because the backend appends the `reset_token` query parameter automatically.
+If `PASSWORD_RESET_URL` is omitted, the backend falls back to a trusted origin from `CORS_ORIGINS` when it can build a safe reset link.
 If you deploy with the root [`docker-compose.yml`](./docker-compose.yml), these Resend and reset-link values must be present in the root `.env` because Compose injects them into the backend container.
 
 See `backend/.env.example` for backend-specific defaults.
+
+### Password reset flow
+
+- `POST /api/auth/forgot-password` sends a reset email through Resend when `RESEND_API_KEY` and `RESEND_FROM_EMAIL` are configured.
+- The frontend handles reset links on `/reset-password?reset_token=...` and shows a dedicated password reset form.
+- If email delivery is not configured, the API returns a clear setup error instead of silently failing.
 
 ## API overview
 
@@ -181,6 +189,8 @@ Main groups under `/api`:
 - `/api/storage` - storage stats, activity, trash cleanup
 - `/api/admin` - admin-only user/system endpoints
 - `/api/share` - share link create/access/revoke
+
+Notable auth routes include login, register, forgot/reset password, 2FA setup and verification, and active session management.
 
 ## Security notes
 
