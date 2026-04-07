@@ -1,130 +1,137 @@
-# Home Cloud Drive - Backend
+# Home Cloud Drive Backend
 
-A FastAPI backend for the Home Cloud Drive personal cloud storage application.
+FastAPI backend for Home Cloud Drive, providing authentication, file storage APIs, search, sharing, activity tracking, and admin operations.
 
 ## Features
 
-- 🔐 **JWT Authentication** - Secure token-based authentication
-- 📁 **File Management** - Upload, download, rename, move, delete files
-- 📂 **Folder Operations** - Create and organize folders
-- ⭐ **Favorites** - Star important files
-- 🗑️ **Trash System** - Soft delete with restore capability
-- 📊 **Storage Tracking** - Real-time usage statistics
-- 📝 **Activity Log** - Track all file operations
-- 🐳 **Docker Ready** - Easy deployment with Docker
+- JWT authentication with optional TOTP-based 2FA
+- Password reset flow delivered through Resend
+- Active session tracking with device labels and session revocation
+- File upload, download, preview, thumbnail, copy, move, rename, trash, and restore APIs
+- Folder management and server-backed file search
+- Storage quotas, activity logs, and admin management endpoints
+- Docker-ready deployment with SQLite and local disk storage
 
 ## Quick Start
 
-### Local Development
+### Local development
 
-1. **Create virtual environment:**
+1. Create and activate a virtual environment:
+
 ```bash
 cd backend
 python -m venv venv
 .\venv\Scripts\activate  # Windows
-source venv/bin/activate  # Linux/Mac
+source venv/bin/activate # Linux/macOS
 ```
 
-2. **Install dependencies:**
+2. Install dependencies:
+
 ```bash
 pip install -r requirements.txt
 ```
 
-3. **Copy environment file:**
+3. Copy the environment template:
+
 ```bash
-copy .env.example .env  # Windows
-cp .env.example .env    # Linux/Mac
+copy .env.example .env   # Windows
+cp .env.example .env     # Linux/macOS
 ```
 
-4. **Run the server:**
+4. Start the API server:
+
 ```bash
 uvicorn app.main:app --reload --port 8000
 ```
 
-5. **Open API docs:** http://localhost:8000/docs
+5. Open interactive API docs at [http://localhost:8000/docs](http://localhost:8000/docs).
 
-### Docker Deployment
+### Docker deployment
+
+From the repository root:
 
 ```bash
-# From project root
 docker-compose up -d --build
 ```
 
-## API Endpoints
+## Authentication and account endpoints
 
-### Authentication
 | Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/auth/register` | Register new user |
-| POST | `/api/auth/login` | Login (get JWT token) |
-| POST | `/api/auth/forgot-password` | Send password reset link |
-| POST | `/api/auth/reset-password` | Reset password from reset link |
-| GET | `/api/auth/me` | Get current user info |
+| --- | --- | --- |
+| POST | `/api/auth/register` | Register a new user when signups are enabled |
+| POST | `/api/auth/login` | Login with email and password |
+| POST | `/api/auth/login/2fa` | Complete a login challenge with a 6-digit TOTP code |
+| GET | `/api/auth/me` | Return the current user profile |
+| POST | `/api/auth/logout` | Revoke the current session |
+| GET | `/api/auth/sessions` | List active and recent sessions |
+| DELETE | `/api/auth/sessions/{session_id}` | Revoke a specific session |
+| PATCH | `/api/auth/password` | Change the current user's password |
+| POST | `/api/auth/forgot-password` | Email a password reset link |
+| POST | `/api/auth/reset-password` | Set a new password from a reset token |
+| POST | `/api/auth/2fa/setup` | Generate a pending TOTP secret and otpauth URL |
+| POST | `/api/auth/2fa/enable` | Enable 2FA after verifying a TOTP code |
+| POST | `/api/auth/2fa/disable` | Disable 2FA after verifying password and TOTP |
 
-### Files
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/files` | List files |
-| POST | `/api/files/upload` | Upload files |
-| GET | `/api/files/{id}/download` | Download file |
-| PATCH | `/api/files/{id}` | Update (rename/move/star) |
-| POST | `/api/files/{id}/trash` | Move to trash |
-| POST | `/api/files/{id}/restore` | Restore from trash |
-| DELETE | `/api/files/{id}` | Permanently delete |
+## Core API groups
 
-### Folders
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| POST | `/api/folders` | Create folder |
-| DELETE | `/api/folders/{id}` | Delete folder |
-
-### Storage
-| Method | Endpoint | Description |
-|--------|----------|-------------|
-| GET | `/api/storage` | Get storage stats |
-| GET | `/api/storage/activity` | Get activity log |
-| DELETE | `/api/storage/trash` | Empty trash |
+| Area | Routes |
+| --- | --- |
+| Files | `/api/files`, upload, preview, thumbnail, copy, trash, restore, download |
+| Folders | `/api/folders` |
+| Storage | `/api/storage`, `/api/storage/activity`, `/api/storage/trash` |
+| Sharing | `/api/share` |
+| Admin | `/api/admin` |
 
 ## Configuration
 
-Environment variables (in `.env`):
+Environment variables in `backend/.env`:
 
 | Variable | Default | Description |
-|----------|---------|-------------|
-| `SECRET_KEY` | - | JWT secret key |
-| `DATABASE_URL` | `sqlite+aiosqlite:///./data/homecloud.db` | Database URL |
-| `STORAGE_PATH` | `./storage` | File storage directory |
-| `MAX_STORAGE_BYTES` | `107374182400` (100GB) | Max storage per user |
-| `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` (24h) | Token expiration |
-| `PASSWORD_RESET_EXPIRE_MINUTES` | `30` | Password reset link expiration |
-| `RESEND_API_KEY` | - | Resend API key used for transactional email |
-| `RESEND_FROM_EMAIL` | - | Sender address for password reset emails |
+| --- | --- | --- |
+| `SECRET_KEY` | - | JWT signing key; use a long random value |
+| `DATABASE_URL` | `sqlite+aiosqlite:///./data/homecloud.db` | Database connection string |
+| `STORAGE_PATH` | `./storage` | Local storage directory |
+| `MAX_STORAGE_BYTES` | `107374182400` | Per-user storage quota in bytes |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Login token lifetime |
+| `PASSWORD_RESET_EXPIRE_MINUTES` | `30` | Password reset token lifetime |
+| `ALLOW_REGISTRATION` | `false` | Enable or disable public signups |
+| `RESEND_API_KEY` | - | Resend API key for transactional email |
+| `RESEND_FROM_EMAIL` | - | Sender email used for account emails |
 | `RESEND_FROM_NAME` | `Home Cloud` | Sender display name |
 | `RESEND_API_URL` | `https://api.resend.com/emails` | Resend send-email endpoint |
-| `RESEND_TIMEOUT_SECONDS` | `15` | Resend API timeout in seconds |
-| `PASSWORD_RESET_URL` | - | Optional frontend URL used in reset emails |
+| `RESEND_TIMEOUT_SECONDS` | `15` | Timeout for Resend requests |
+| `PASSWORD_RESET_URL` | - | Preferred frontend reset page, such as `https://cloud.example.com/reset-password` |
 
-## Project Structure
+Password reset email delivery is enabled only when both `RESEND_API_KEY` and `RESEND_FROM_EMAIL` are set.
+If `PASSWORD_RESET_URL` is blank, the backend tries to build a reset link from a trusted request origin or the first configured CORS origin.
 
-```
+## Password reset behavior
+
+- `forgot-password` always returns a generic success message when the email exists, avoiding user enumeration.
+- Reset links include a `reset_token` query parameter and are meant for the frontend `/reset-password` route.
+- Reset tokens are invalidated when the password changes because they are tied to the user's current password fingerprint.
+- Misconfigured email delivery returns a clear 503 error describing the missing Resend setting.
+
+## Project structure
+
+```text
 backend/
-├── app/
-│   ├── main.py          # FastAPI app entry
-│   ├── config.py        # Settings
-│   ├── database.py      # Database connection
-│   ├── models.py        # SQLAlchemy models
-│   ├── schemas.py       # Pydantic schemas
-│   ├── auth.py          # Auth utilities
-│   └── routers/
-│       ├── auth.py      # Auth endpoints
-│       ├── files.py     # File endpoints
-│       ├── folders.py   # Folder endpoints
-│       └── storage.py   # Storage endpoints
-├── requirements.txt
-├── Dockerfile
-└── .env.example
+|-- app/
+|   |-- main.py                # FastAPI app entry and startup tasks
+|   |-- config.py              # Settings and environment loading
+|   |-- database.py            # Async database engine/session setup
+|   |-- email_service.py       # Resend email delivery helpers
+|   |-- models.py              # SQLAlchemy models
+|   |-- schemas.py             # Pydantic request/response schemas
+|   |-- auth.py                # Auth, JWT, password reset, and 2FA helpers
+|   `-- routers/               # API route modules
+|-- test_password_reset_config.py
+|-- requirements.txt
+|-- Dockerfile
+`-- .env.example
 ```
 
-## License
+## Notes
 
-MIT
+- The backend uses background tasks plus thread offloading for blocking email sends.
+- Root deployment settings in [`../docker-compose.yml`](../docker-compose.yml) must also include the password reset and Resend variables when running in containers.
