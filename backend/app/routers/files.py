@@ -69,6 +69,24 @@ def sanitize_filename(filename: Optional[str]) -> str:
     return sanitized or "unnamed"
 
 
+def sanitize_rename_target(filename: Optional[str]) -> str:
+    """Normalize rename input and reject values that collapse to an empty name."""
+    safe_name = sanitize_filename(filename)
+    if safe_name != "unnamed":
+        return safe_name
+
+    raw_name = (filename or "").replace("\x00", "")
+    for char in raw_name:
+        if char in {"/", "\\", "\r", "\n"}:
+            return safe_name
+        if unicodedata.category(char).startswith("C"):
+            continue
+        if char not in {" ", "."}:
+            return safe_name
+
+    raise HTTPException(status_code=400, detail="File/folder name is invalid")
+
+
 def build_content_disposition(disposition: str, filename: str) -> str:
     """Create a safe Content-Disposition header value."""
     # Restrict disposition to a small allowlist to prevent header injection.
@@ -1363,15 +1381,17 @@ async def update_file(
         raise HTTPException(status_code=404, detail="File not found")
     
     if update.name is not None:
+        safe_name = sanitize_rename_target(update.name)
         old_name = file.name
-        file.name = update.name
+        file.name = safe_name
         activity = ActivityLog(
             user_id=current_user.id,
             action="rename",
             file_name=f"{old_name} → {update.name}",
         )
         db.add(activity)
-    
+        activity.file_name = f"{old_name} -> {safe_name}"
+
     if update.path is not None:
         file.path = serialize_path(update.path)
         activity = ActivityLog(
