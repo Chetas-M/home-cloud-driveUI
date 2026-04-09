@@ -8,9 +8,11 @@ FastAPI backend for Home Cloud Drive, providing authentication, file storage API
 - Password reset flow delivered through Resend
 - Active session tracking with device labels and session revocation
 - File upload, download, preview, thumbnail, copy, move, rename, trash, and restore APIs
+- File version history with upload, restore, download, and delete operations
 - Folder management and server-backed file search
-- Storage quotas, activity logs, and admin management endpoints
+- Storage quotas, version-aware usage accounting, activity logs, and admin management endpoints
 - Docker-ready deployment with SQLite and local disk storage
+- Startup migrations, search-index backfill, and automatic trash cleanup
 
 ## Quick Start
 
@@ -44,7 +46,9 @@ cp .env.example .env     # Linux/macOS
 uvicorn app.main:app --reload --port 8000
 ```
 
-5. Open interactive API docs at [http://localhost:8000/docs](http://localhost:8000/docs).
+5. Open the API at `http://localhost:8000`.
+
+The current app configuration disables `/docs`, `/redoc`, and `/openapi.json`, so use the route tables below or inspect the router modules directly during local development.
 
 ### Docker deployment
 
@@ -76,11 +80,23 @@ docker-compose up -d --build
 
 | Area | Routes |
 | --- | --- |
-| Files | `/api/files`, upload, preview, thumbnail, copy, trash, restore, download |
+| Files | `/api/files`, upload, resumable upload, preview, thumbnail, copy, trash, restore, download |
 | Folders | `/api/folders` |
 | Storage | `/api/storage`, `/api/storage/activity`, `/api/storage/trash` |
 | Sharing | `/api/share` |
 | Admin | `/api/admin` |
+
+## File version endpoints
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/files/{file_id}/versions` | List version history for a file |
+| POST | `/api/files/{file_id}/versions` | Upload a new latest version |
+| GET | `/api/files/{file_id}/versions/{version_id}/download` | Download a specific historical version |
+| POST | `/api/files/{file_id}/versions/{version_id}/restore` | Restore a historical version as a new latest version |
+| DELETE | `/api/files/{file_id}/versions/{version_id}` | Delete a historical version that is not current |
+
+Version history is available only for non-folder files. Existing rows created before the feature landed get a base version record automatically the first time version history is requested.
 
 ## Configuration
 
@@ -92,9 +108,14 @@ Environment variables in `backend/.env`:
 | `DATABASE_URL` | `sqlite+aiosqlite:///./data/homecloud.db` | Database connection string |
 | `STORAGE_PATH` | `./storage` | Local storage directory |
 | `MAX_STORAGE_BYTES` | `107374182400` | Per-user storage quota in bytes |
+| `MAX_FILE_SIZE_BYTES` | `1073741824` | Maximum size allowed for a single file or restored version (`0` disables the limit) |
+| `TRASH_AUTO_DELETE_DAYS` | `30` | Permanently delete trashed files older than this many days during startup (`0` disables cleanup) |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | `1440` | Login token lifetime |
 | `PASSWORD_RESET_EXPIRE_MINUTES` | `30` | Password reset token lifetime |
+| `TWO_FACTOR_TEMP_TOKEN_EXPIRE_MINUTES` | `10` | Temporary token lifetime for completing a 2FA login |
 | `ALLOW_REGISTRATION` | `false` | Enable or disable public signups |
+| `SESSION_LAST_SEEN_UPDATE_INTERVAL_SECONDS` | `60` | Minimum interval between `last_seen_at` writes for a session |
+| `TRUST_PROXY_HEADERS` | `false` | Use forwarded proxy headers when resolving client IP addresses |
 | `RESEND_API_KEY` | - | Resend API key for transactional email |
 | `RESEND_FROM_EMAIL` | - | Sender email used for account emails |
 | `RESEND_FROM_NAME` | `Home Cloud` | Sender display name |
@@ -111,6 +132,13 @@ If `PASSWORD_RESET_URL` is blank, the backend tries to build a reset link from a
 - Reset links include a `reset_token` query parameter and are meant for the frontend `/reset-password` route.
 - Reset tokens are invalidated when the password changes because they are tied to the user's current password fingerprint.
 - Misconfigured email delivery returns a clear 503 error describing the missing Resend setting.
+
+## Storage and lifecycle behavior
+
+- Each uploaded file creates an initial `v1` record in `file_versions`.
+- Uploading or restoring a version creates a new latest version instead of mutating the old one.
+- The storage API adds a `versions` breakdown bucket for archived versions so quota usage reflects historical copies.
+- Startup runs lightweight schema migrations, background search-index backfill, and trash cleanup for items older than `TRASH_AUTO_DELETE_DAYS`.
 
 ## Project structure
 
@@ -134,4 +162,4 @@ backend/
 ## Notes
 
 - The backend uses background tasks plus thread offloading for blocking email sends.
-- Root deployment settings in [`../docker-compose.yml`](../docker-compose.yml) must also include the password reset and Resend variables when running in containers.
+- Root deployment settings in [`../docker-compose.yml`](../docker-compose.yml) must also include the password reset, email, and storage-limit variables when running in containers.

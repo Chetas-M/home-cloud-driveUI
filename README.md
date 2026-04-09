@@ -24,6 +24,7 @@ Home Cloud Drive lets you upload, organize, preview, share, and manage files wit
 - Authenticator-based Two-Factor Authentication (2FA)
 - Active Device & Session Management (view and revoke sessions)
 - Resumable chunked file uploads & folder uploads with real-time UI progress
+- File version history with upload, download, restore, and delete actions
 - Server-backed file search with background auto-indexing
 - Drag-and-drop organization inside a detailed folder hierarchy
 - HTTP Range Request streaming for seamless Video, Audio, & PDF inline preview
@@ -32,6 +33,7 @@ Home Cloud Drive lets you upload, organize, preview, share, and manage files wit
 - Image thumbnails generated server-side
 - Secure sharing links (password, expiry, download limits)
 - Storage usage reporting + activity logs
+- Version-aware storage accounting in the dashboard
 - Admin panel for user and quota management
 
 ## Architecture
@@ -40,6 +42,7 @@ This repository contains a full-stack deployment:
 
 - **Frontend**: React + Vite, served by Nginx in production
 - **Backend**: FastAPI + SQLAlchemy + SQLite
+- **Data lifecycle**: startup migrations, search-index backfill, and automatic trash cleanup
 - **Deployment**: Docker Compose stack with:
   - backend API service
   - frontend static site service
@@ -155,10 +158,15 @@ Primary variables (root `.env`):
 - `STORAGE_PATH` - host path for uploaded files
 - `DATA_PATH` - host path for SQLite data
 - `MAX_STORAGE_BYTES` - per-user quota (`0` = unlimited)
+- `MAX_FILE_SIZE_BYTES` - maximum size allowed for a single uploaded/restored file (`0` = unlimited)
+- `TRASH_AUTO_DELETE_DAYS` - days to keep trashed items before startup cleanup permanently deletes them (`0` disables cleanup)
 - `ACCESS_TOKEN_EXPIRE_MINUTES` - token lifetime
+- `TWO_FACTOR_TEMP_TOKEN_EXPIRE_MINUTES` - lifetime of temporary 2FA login challenge tokens
 - `PASSWORD_RESET_EXPIRE_MINUTES` - password reset token lifetime in minutes
 - `CORS_ORIGINS` - comma-separated allowed origins
 - `ALLOW_REGISTRATION` - `true` to allow public signups
+- `SESSION_LAST_SEEN_UPDATE_INTERVAL_SECONDS` - throttle for session activity writes
+- `TRUST_PROXY_HEADERS` - trust forwarded proxy headers for client IP detection
 - `RESEND_API_KEY` - Resend API key used to send transactional emails
 - `RESEND_FROM_EMAIL` / `RESEND_FROM_NAME` - sender details shown on password reset emails
 - `RESEND_API_URL` - Resend send-email endpoint, defaults to `https://api.resend.com/emails`
@@ -169,7 +177,7 @@ Primary variables (root `.env`):
 For production deployments, set `PASSWORD_RESET_URL` to your public frontend reset page so emailed links always use the correct host.
 Use the full frontend reset route, for example `https://cloud.example.com/reset-password`, because the backend appends the `reset_token` query parameter automatically.
 If `PASSWORD_RESET_URL` is omitted, the backend falls back to a trusted origin from `CORS_ORIGINS` when it can build a safe reset link.
-If you deploy with the root [`docker-compose.yml`](./docker-compose.yml), these Resend and reset-link values must be present in the root `.env` because Compose injects them into the backend container.
+If you deploy with the root [`docker-compose.yml`](./docker-compose.yml), the root `.env` is also where container-level overrides such as `MAX_FILE_SIZE_BYTES` and `TRASH_AUTO_DELETE_DAYS` should be set.
 
 See `backend/.env.example` for backend-specific defaults.
 
@@ -191,6 +199,22 @@ Main groups under `/api`:
 - `/api/share` - share link create/access/revoke
 
 Notable auth routes include login, register, forgot/reset password, 2FA setup and verification, and active session management.
+Notable file routes also include version history endpoints for listing, uploading, restoring, downloading, and deleting historical versions of a file.
+
+## File version history
+
+- Every newly uploaded file starts at version `v1`.
+- Non-folder files expose version history from the file details panel and context menu.
+- Restoring an older version creates a new latest version rather than mutating history in place.
+- Historical versions count toward storage usage and appear as a `versions` bucket in `/api/storage`.
+- Existing databases are backfilled lazily: the backend creates base version records for legacy files the first time version history is accessed.
+
+## Runtime behavior
+
+- The backend runs lightweight SQLite migrations on startup for supported schema additions such as file version metadata.
+- Search indexing for older files is backfilled in the background after startup.
+- Trashed files older than `TRASH_AUTO_DELETE_DAYS` are permanently deleted during backend startup.
+- The FastAPI OpenAPI/docs endpoints are disabled in the shipped backend app configuration.
 
 ## Security notes
 

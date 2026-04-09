@@ -1,5 +1,16 @@
 # Home Cloud Drive Development Report
 
+## Latest Updates (Apr 8, 2026)
+
+### File version history and storage visibility
+- Added full per-file version history with backend persistence in `file_versions` and a `version` field on file records.
+- Shipped version endpoints to list history, upload a new version, download an older version, restore an older version as the new latest copy, and delete non-current versions.
+- Added a frontend Version History modal plus details/context-menu entry points for version operations.
+- Updated storage accounting so archived versions count toward quota usage and appear in the storage breakdown.
+- Added startup migration support for the `files.version` column and the unique `(file_id, version)` index, plus lazy base-version backfill for legacy files.
+
+---
+
 ## Latest Updates (Apr 3, 2026)
 
 ### Authentication and email delivery
