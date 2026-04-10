@@ -363,9 +363,8 @@ class ApiService {
                     const chunkLength = end - start;
 
                     if (uploadedChunks.has(i)) {
-                        loadedBytes = Math.max(loadedBytes, end);
-                        lastLoaded = loadedBytes;
-                        lastTime = Date.now();
+                        // Bytes for this chunk are already reflected in the initial loadedBytes
+                        // (from status.uploaded_bytes). Do not add them again.
                         emitProgress(loadedBytes, 0);
                         continue;
                     }
@@ -457,12 +456,13 @@ class ApiService {
                             chunkSuccess = true;
                             loadedBytes += chunkLength;
                             uploadedChunks.add(i);
+                            // Only persist the upload_id, path, and filename.
+                            // uploaded_chunks/uploaded_bytes are fetched from the server on resume,
+                            // so storing the full set would waste localStorage space needlessly.
                             updateSession({
                                 upload_id,
                                 path,
                                 filename: file.name,
-                                uploaded_chunks: Array.from(uploadedChunks),
-                                uploaded_bytes: loadedBytes,
                             });
                             const avgSpeed = speedSamples.length > 0
                                 ? speedSamples.reduce((a, b) => a + b, 0) / speedSamples.length

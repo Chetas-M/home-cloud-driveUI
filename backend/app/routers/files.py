@@ -274,7 +274,11 @@ def _get_uploaded_bytes(temp_dir: str) -> int:
 def get_uploaded_chunks(temp_dir: str, metadata: dict) -> tuple[list[int], int]:
     uploaded_chunks: list[int] = []
     uploaded_bytes = 0
-    for name in os.listdir(temp_dir):
+    try:
+        entries = os.listdir(temp_dir)
+    except OSError:
+        return [], 0
+    for name in entries:
         if not name.startswith("chunk_"):
             continue
         try:
@@ -740,9 +744,10 @@ async def get_chunked_upload_status(
 
     metadata = await read_upload_metadata(temp_dir)
     uploaded_chunks, uploaded_bytes = get_uploaded_chunks(temp_dir, metadata)
+    uploaded_chunks_set = set(uploaded_chunks)
     next_chunk_index = metadata["expected_chunks"]
     for idx in range(metadata["expected_chunks"]):
-        if idx not in uploaded_chunks:
+        if idx not in uploaded_chunks_set:
             next_chunk_index = idx
             break
 
