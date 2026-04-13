@@ -14,13 +14,13 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, func, update as sql_update
 from sqlalchemy.exc import IntegrityError
 import logging
 
 from app.database import get_db
 from app.limiter import limiter
-from app.models import User, File as FileModel, ActivityLog, FileVersion
+from app.models import User, File as FileModel, ActivityLog, FileVersion, ShareLink
 from app.schemas import (
     FileResponse as FileResponseSchema,
     FileUpdate,
@@ -37,6 +37,7 @@ from app.config import get_settings
 from app.db_utils import LIKE_ESCAPE_CHAR, escape_like_literal
 from app.search_index import build_match_context, build_search_document
 from app.thumbnails import generate_thumbnail, can_generate_thumbnail
+from app.tree_validation import normalize_tree_path, sanitize_tree_name, ensure_folder_path_exists
 
 settings = get_settings()
 logger = logging.getLogger(__name__)
@@ -73,20 +74,7 @@ def sanitize_filename(filename: Optional[str]) -> str:
 
 def sanitize_rename_target(filename: Optional[str]) -> str:
     """Normalize rename input and reject values that collapse to an empty name."""
-    safe_name = sanitize_filename(filename)
-    if safe_name != "unnamed":
-        return safe_name
-
-    raw_name = (filename or "").replace("\x00", "")
-    for char in raw_name:
-        if char in {"/", "\\", "\r", "\n"}:
-            return safe_name
-        if unicodedata.category(char).startswith("C"):
-            continue
-        if char not in {" ", "."}:
-            return safe_name
-
-    raise HTTPException(status_code=400, detail="File/folder name is invalid")
+    return sanitize_tree_name(filename)
 
 
 def build_content_disposition(disposition: str, filename: str) -> str:
@@ -1523,7 +1511,10 @@ async def update_file(
     
     if not file:
         raise HTTPException(status_code=404, detail="File not found")
-    
+
+    old_path = parse_path(file.path)
+    old_full_path = old_path + [file.name]
+
     if update.name is not None:
         safe_name = sanitize_rename_target(update.name)
         old_name = file.name
@@ -1536,7 +1527,13 @@ async def update_file(
         db.add(activity)
 
     if update.path is not None:
-        file.path = serialize_path(update.path)
+        normalized_path = normalize_tree_path(update.path)
+        await ensure_folder_path_exists(db, current_user.id, normalized_path)
+
+        if file.type == "folder" and normalized_path[:len(old_full_path)] == old_full_path:
+            raise HTTPException(status_code=400, detail="Cannot move a folder into itself")
+
+        file.path = serialize_path(normalized_path)
         activity = ActivityLog(
             user_id=current_user.id,
             action="move",
@@ -1553,6 +1550,35 @@ async def update_file(
                 file_name=file.name,
             )
             db.add(activity)
+
+    if file.type == "folder" and (update.name is not None or update.path is not None):
+        new_full_path = parse_path(file.path) + [file.name]
+        folder_path_prefixes = get_serialized_path_prefixes(old_full_path)
+        escaped_folder_path_prefixes = [
+            (
+                f"{escape_like_literal(prefix[:-1])}%"
+                if prefix.endswith("%")
+                else escape_like_literal(prefix)
+            )
+            for prefix in folder_path_prefixes
+        ]
+        children_result = await db.execute(
+            select(FileModel).where(
+                and_(
+                    FileModel.owner_id == current_user.id,
+                    FileModel.id != file.id,
+                    or_(*[
+                        FileModel.path.like(prefix, escape=LIKE_ESCAPE_CHAR)
+                        for prefix in escaped_folder_path_prefixes
+                    ]),
+                )
+            )
+        )
+        for child in children_result.scalars().all():
+            child_path = parse_path(child.path)
+            if child_path[:len(old_full_path)] != old_full_path:
+                continue
+            child.path = serialize_path(new_full_path + child_path[len(old_full_path):])
     
     file.updated_at = datetime.now(timezone.utc)
     await db.flush()
@@ -1584,6 +1610,7 @@ async def trash_file(
     file.is_trashed = True
     file.trashed_at = now
     file.updated_at = now
+    affected_ids = [file.id]
     
     # If folder, recursively trash all children
     if file.type == "folder":
@@ -1601,6 +1628,17 @@ async def trash_file(
         for child in children_result.scalars().all():
             child.is_trashed = True
             child.trashed_at = now
+            affected_ids.append(child.id)
+
+    await db.execute(
+        sql_update(ShareLink)
+        .where(
+            ShareLink.owner_id == current_user.id,
+            ShareLink.file_id.in_(affected_ids),
+            ShareLink.is_active.is_(True),
+        )
+        .values(is_active=False)
+    )
     
     activity = ActivityLog(
         user_id=current_user.id,

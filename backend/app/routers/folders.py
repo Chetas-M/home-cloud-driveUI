@@ -6,12 +6,13 @@ from typing import List
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, update as sql_update
 
 from app.database import get_db
-from app.models import User, File as FileModel, ActivityLog
+from app.models import User, File as FileModel, ActivityLog, ShareLink
 from app.schemas import FolderCreate, FileResponse as FileResponseSchema
 from app.auth import get_current_user
+from app.tree_validation import normalize_tree_path, sanitize_tree_name, ensure_folder_path_exists
 
 router = APIRouter(prefix="/api/folders", tags=["Folders"])
 
@@ -49,13 +50,17 @@ async def create_folder(
     db: AsyncSession = Depends(get_db)
 ):
     """Create a new folder"""
+    normalized_name = sanitize_tree_name(folder.name)
+    normalized_path = normalize_tree_path(folder.path)
+    await ensure_folder_path_exists(db, current_user.id, normalized_path)
+
     # Check if folder with same name exists in same path
     existing = await db.execute(
         select(FileModel).where(
             and_(
                 FileModel.owner_id == current_user.id,
-                FileModel.name == folder.name,
-                FileModel.path.in_(get_serialized_path_variants(folder.path)),
+                FileModel.name == normalized_name,
+                FileModel.path.in_(get_serialized_path_variants(normalized_path)),
                 FileModel.type == "folder",
                 FileModel.is_trashed == False,
             )
@@ -69,10 +74,10 @@ async def create_folder(
         )
     
     new_folder = FileModel(
-        name=folder.name,
+        name=normalized_name,
         type="folder",
         size=0,
-        path=serialize_path(folder.path),
+        path=serialize_path(normalized_path),
         owner_id=current_user.id,
         version=1,
     )
@@ -83,7 +88,7 @@ async def create_folder(
     activity = ActivityLog(
         user_id=current_user.id,
         action="create_folder",
-        file_name=folder.name,
+        file_name=normalized_name,
     )
     db.add(activity)
     
@@ -140,11 +145,13 @@ async def delete_folder(
         )
     )
     children = children_result.scalars().all()
+    affected_ids = [folder.id]
     
     # Trash all children
     for child in children:
         child.is_trashed = True
         child.trashed_at = datetime.now(timezone.utc)
+        affected_ids.append(child.id)
     
     # Trash the folder itself
     folder.is_trashed = True
@@ -157,5 +164,15 @@ async def delete_folder(
         file_name=folder.name,
     )
     db.add(activity)
-    
+
+    await db.execute(
+        sql_update(ShareLink)
+        .where(
+            ShareLink.owner_id == current_user.id,
+            ShareLink.file_id.in_(affected_ids),
+            ShareLink.is_active == True,
+        )
+        .values(is_active=False)
+    )
+
     await db.flush()

@@ -71,6 +71,8 @@ async def create_share_link(
 
     if file.type == "folder":
         raise HTTPException(status_code=400, detail="Cannot share folders directly")
+    if file.is_trashed:
+        raise HTTPException(status_code=400, detail="Cannot share files that are in trash")
 
     # Build share link
     share_link = ShareLink(
@@ -151,6 +153,23 @@ async def get_my_share_links(
     return links
 
 
+async def _deactivate_share_link_for_trashed_file(
+    db: AsyncSession,
+    link: ShareLink
+) -> None:
+    """Persistently deactivate an existing share link for a trashed file."""
+    if not link.is_active:
+        return
+
+    await db.execute(
+        update(ShareLink)
+        .where(ShareLink.id == link.id)
+        .values(is_active=False)
+    )
+    await db.commit()
+    link.is_active = False
+
+
 @router.post("/{token}")
 @limiter.limit("60/minute")
 async def access_shared_file(
@@ -170,6 +189,10 @@ async def access_shared_file(
         raise HTTPException(status_code=404, detail="Share link not found")
 
     link, file = row[0], row[1]
+
+    if file.is_trashed:
+        await _deactivate_share_link_for_trashed_file(db, link)
+        raise HTTPException(status_code=410, detail="This file is no longer shared")
 
     # Check if active
     if not link.is_active:
@@ -226,6 +249,9 @@ async def download_shared_file(
         raise HTTPException(status_code=404, detail="Share link not found")
 
     link, file = row[0], row[1]
+
+    if file.is_trashed:
+        raise HTTPException(status_code=410, detail="This file is no longer shared")
 
     # Validate
     if not link.is_active:
