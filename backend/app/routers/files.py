@@ -14,13 +14,13 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Query, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, func, update as sql_update
 from sqlalchemy.exc import IntegrityError
 import logging
 
 from app.database import get_db
 from app.limiter import limiter
-from app.models import User, File as FileModel, ActivityLog, FileVersion
+from app.models import User, File as FileModel, ActivityLog, FileVersion, ShareLink
 from app.schemas import (
     FileResponse as FileResponseSchema,
     FileUpdate,
@@ -1584,6 +1584,7 @@ async def trash_file(
     file.is_trashed = True
     file.trashed_at = now
     file.updated_at = now
+    affected_ids = [file.id]
     
     # If folder, recursively trash all children
     if file.type == "folder":
@@ -1601,6 +1602,17 @@ async def trash_file(
         for child in children_result.scalars().all():
             child.is_trashed = True
             child.trashed_at = now
+            affected_ids.append(child.id)
+
+    await db.execute(
+        sql_update(ShareLink)
+        .where(
+            ShareLink.owner_id == current_user.id,
+            ShareLink.file_id.in_(affected_ids),
+            ShareLink.is_active.is_(True),
+        )
+        .values(is_active=False)
+    )
     
     activity = ActivityLog(
         user_id=current_user.id,

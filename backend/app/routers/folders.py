@@ -6,10 +6,10 @@ from typing import List
 from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, and_, or_
+from sqlalchemy import select, and_, or_, update as sql_update
 
 from app.database import get_db
-from app.models import User, File as FileModel, ActivityLog
+from app.models import User, File as FileModel, ActivityLog, ShareLink
 from app.schemas import FolderCreate, FileResponse as FileResponseSchema
 from app.auth import get_current_user
 
@@ -140,11 +140,13 @@ async def delete_folder(
         )
     )
     children = children_result.scalars().all()
+    affected_ids = [folder.id]
     
     # Trash all children
     for child in children:
         child.is_trashed = True
         child.trashed_at = datetime.now(timezone.utc)
+        affected_ids.append(child.id)
     
     # Trash the folder itself
     folder.is_trashed = True
@@ -157,5 +159,15 @@ async def delete_folder(
         file_name=folder.name,
     )
     db.add(activity)
-    
+
+    await db.execute(
+        sql_update(ShareLink)
+        .where(
+            ShareLink.owner_id == current_user.id,
+            ShareLink.file_id.in_(affected_ids),
+            ShareLink.is_active == True,
+        )
+        .values(is_active=False)
+    )
+
     await db.flush()

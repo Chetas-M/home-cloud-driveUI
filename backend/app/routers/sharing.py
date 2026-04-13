@@ -71,6 +71,8 @@ async def create_share_link(
 
     if file.type == "folder":
         raise HTTPException(status_code=400, detail="Cannot share folders directly")
+    if file.is_trashed:
+        raise HTTPException(status_code=400, detail="Cannot share files that are in trash")
 
     # Build share link
     share_link = ShareLink(
@@ -171,6 +173,9 @@ async def access_shared_file(
 
     link, file = row[0], row[1]
 
+    if file.is_trashed:
+        raise HTTPException(status_code=410, detail="This file is no longer shared")
+
     # Check if active
     if not link.is_active:
         raise HTTPException(status_code=410, detail="This share link has been revoked")
@@ -226,6 +231,9 @@ async def download_shared_file(
         raise HTTPException(status_code=404, detail="Share link not found")
 
     link, file = row[0], row[1]
+
+    if file.is_trashed:
+        raise HTTPException(status_code=410, detail="This file is no longer shared")
 
     # Validate
     if not link.is_active:
