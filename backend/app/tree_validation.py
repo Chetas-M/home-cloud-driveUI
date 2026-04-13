@@ -1,6 +1,7 @@
 """
 Validation helpers for folder/file tree metadata.
 """
+import json
 import unicodedata
 from typing import List
 
@@ -35,6 +36,18 @@ def normalize_tree_path(path: List[str] | None) -> List[str]:
     return [sanitize_tree_name(segment) for segment in path]
 
 
+def _serialize_path(p: List[str]) -> str:
+    return json.dumps(p, separators=(",", ":"))
+
+
+def _serialize_path_legacy(p: List[str]) -> str:
+    return json.dumps(p)
+
+
+def _path_variants(p: List[str]) -> List[str]:
+    return list({_serialize_path(p), _serialize_path_legacy(p)})
+
+
 async def ensure_folder_path_exists(
     db: AsyncSession,
     user_id: str,
@@ -49,17 +62,6 @@ async def ensure_folder_path_exists(
 
     # Import here to avoid a top-level circular-import with models → database.
     from app.models import File as FileModel  # noqa: PLC0415
-
-    def _serialize(p: List[str]) -> str:
-        import json
-        return json.dumps(p, separators=(",", ":"))
-
-    def _serialize_legacy(p: List[str]) -> str:
-        import json
-        return json.dumps(p)
-
-    def _path_variants(p: List[str]) -> List[str]:
-        return list({_serialize(p), _serialize_legacy(p)})
 
     parent_path = path[:-1]
     folder_name = path[-1]

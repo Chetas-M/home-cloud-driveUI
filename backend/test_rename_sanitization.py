@@ -1,3 +1,4 @@
+import json
 import os
 import unittest
 from datetime import datetime, timezone
@@ -209,8 +210,6 @@ class RenameSanitizationTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_folder_rename_cascades_to_descendants(self):
         """Renaming a folder should update the path of its children."""
-        import json
-
         folder = make_file("OldName", file_type="folder")
         folder.path = "[]"
 
