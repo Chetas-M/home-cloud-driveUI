@@ -154,6 +154,23 @@ async def get_my_share_links(
 
 
 @router.post("/{token}")
+async def _deactivate_share_link_for_trashed_file(
+    db: AsyncSession,
+    link: ShareLink
+) -> None:
+    """Persistently deactivate an existing share link for a trashed file."""
+    if not link.is_active:
+        return
+
+    await db.execute(
+        update(ShareLink)
+        .where(ShareLink.id == link.id)
+        .values(is_active=False)
+    )
+    await db.commit()
+    link.is_active = False
+
+
 @limiter.limit("60/minute")
 async def access_shared_file(
     request: Request,
@@ -174,6 +191,7 @@ async def access_shared_file(
     link, file = row[0], row[1]
 
     if file.is_trashed:
+        await _deactivate_share_link_for_trashed_file(db, link)
         raise HTTPException(status_code=410, detail="This file is no longer shared")
 
     # Check if active
