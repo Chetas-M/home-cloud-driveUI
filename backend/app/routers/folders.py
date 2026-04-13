@@ -12,7 +12,7 @@ from app.database import get_db
 from app.models import User, File as FileModel, ActivityLog, ShareLink
 from app.schemas import FolderCreate, FileResponse as FileResponseSchema
 from app.auth import get_current_user
-from app.tree_validation import normalize_tree_path, sanitize_tree_name
+from app.tree_validation import normalize_tree_path, sanitize_tree_name, ensure_folder_path_exists
 
 router = APIRouter(prefix="/api/folders", tags=["Folders"])
 
@@ -41,27 +41,6 @@ def get_serialized_path_variants(path: List[str]) -> List[str]:
 def get_serialized_path_prefixes(path: List[str]) -> List[str]:
     """Return LIKE prefixes for all known serialized path forms."""
     return [f"{variant[:-1]}%" for variant in get_serialized_path_variants(path)]
-
-
-async def ensure_folder_path_exists(db: AsyncSession, user_id: str, path: List[str]) -> None:
-    if not path:
-        return
-
-    parent_path = path[:-1]
-    folder_name = path[-1]
-    result = await db.execute(
-        select(FileModel.id).where(
-            and_(
-                FileModel.owner_id == user_id,
-                FileModel.type == "folder",
-                FileModel.name == folder_name,
-                FileModel.path.in_(get_serialized_path_variants(parent_path)),
-                FileModel.is_trashed == False,
-            )
-        )
-    )
-    if result.scalar_one_or_none() is None:
-        raise HTTPException(status_code=400, detail="Parent folder does not exist")
 
 
 @router.post("", response_model=FileResponseSchema, status_code=status.HTTP_201_CREATED)

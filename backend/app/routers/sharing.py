@@ -153,7 +153,6 @@ async def get_my_share_links(
     return links
 
 
-@router.post("/{token}")
 async def _deactivate_share_link_for_trashed_file(
     db: AsyncSession,
     link: ShareLink
@@ -171,6 +170,7 @@ async def _deactivate_share_link_for_trashed_file(
     link.is_active = False
 
 
+@router.post("/{token}")
 @limiter.limit("60/minute")
 async def access_shared_file(
     request: Request,
