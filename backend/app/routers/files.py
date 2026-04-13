@@ -1575,12 +1575,23 @@ async def update_file(
     if file.type == "folder" and (update.name is not None or update.path is not None):
         new_full_path = parse_path(file.path) + [file.name]
         folder_path_prefixes = get_serialized_path_prefixes(old_full_path)
+        escaped_folder_path_prefixes = [
+            (
+                f"{escape_like_literal(prefix[:-1])}%"
+                if prefix.endswith("%")
+                else escape_like_literal(prefix)
+            )
+            for prefix in folder_path_prefixes
+        ]
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
                     FileModel.owner_id == current_user.id,
                     FileModel.id != file.id,
-                    or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
+                    or_(*[
+                        FileModel.path.like(prefix, escape=LIKE_ESCAPE_CHAR)
+                        for prefix in escaped_folder_path_prefixes
+                    ]),
                 )
             )
         )
