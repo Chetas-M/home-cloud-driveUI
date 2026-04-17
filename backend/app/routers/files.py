@@ -36,6 +36,16 @@ from app.auth import get_current_user
 from app.config import get_settings
 from app.db_utils import LIKE_ESCAPE_CHAR, escape_like_literal
 from app.search_index import build_match_context, build_search_document
+from app.shared_access import (
+    FileAccessContext,
+    get_file_access_context,
+    get_shared_root_access,
+    get_serialized_path_variants as get_shared_path_variants,
+    parse_path as parse_shared_path,
+    path_prefixes_for_shared_root,
+    relative_path_within_shared_root,
+    resolve_target_path,
+)
 from app.thumbnails import generate_thumbnail, can_generate_thumbnail
 from app.tree_validation import normalize_tree_path, sanitize_tree_name, ensure_folder_path_exists
 
@@ -372,19 +382,40 @@ async def purge_file(db: AsyncSession, file: FileModel) -> int:
     return freed_bytes
 
 
-def to_file_response(file: FileModel) -> FileResponseSchema:
+def to_file_response(
+    file: FileModel,
+    access_ctx: Optional[FileAccessContext] = None,
+    *,
+    path_override: Optional[List[str]] = None,
+    is_shared_root: bool = False,
+) -> FileResponseSchema:
     thumb_url = f"/api/files/{file.id}/thumbnail" if file.thumbnail_path else None
+    ctx = access_ctx or FileAccessContext(
+        role="owner",
+        is_owner=True,
+        owner_id=file.owner_id,
+        owner_username=None,
+    )
     return FileResponseSchema(
         id=file.id,
         name=file.name,
         type=file.type,
         mime_type=file.mime_type,
         size=file.size,
-        path=parse_path(file.path),
+        path=path_override if path_override is not None else parse_path(file.path),
         is_starred=file.is_starred,
         is_trashed=file.is_trashed,
         thumbnail_url=thumb_url,
         version=file.version or 1,
+        is_shared=not ctx.is_owner,
+        is_shared_root=is_shared_root,
+        shared_folder_id=ctx.shared_folder_id,
+        access_role=ctx.role,
+        owner_id=file.owner_id,
+        owner_username=ctx.owner_username,
+        can_write=ctx.can_write,
+        can_manage=ctx.can_manage,
+        can_share_public=ctx.can_share_public,
         created_at=file.created_at,
         updated_at=file.updated_at,
     )
@@ -395,26 +426,42 @@ async def list_files(
     path: Optional[str] = Query(None, description="Path as JSON array"),
     include_trashed: bool = Query(False),
     starred_only: bool = Query(False),
+    shared_folder_id: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """List files in a directory"""
+    raw_path = parse_path(path or "[]")
+
+    if shared_folder_id:
+        shared_root, access_ctx = await get_shared_root_access(db, current_user, shared_folder_id)
+        actual_path = parse_shared_path(shared_root.path) + [shared_root.name] + raw_path
+        query = select(FileModel).where(FileModel.owner_id == shared_root.owner_id)
+        if not include_trashed:
+            query = query.where(FileModel.is_trashed == False)
+        if starred_only:
+            query = query.where(FileModel.is_starred == True)
+        query = query.where(FileModel.path.in_(get_shared_path_variants(actual_path)))
+        result = await db.execute(query.order_by(FileModel.type, FileModel.name))
+        files = result.scalars().all()
+        return [
+            to_file_response(
+                file,
+                access_ctx,
+                path_override=relative_path_within_shared_root(file, shared_root),
+            )
+            for file in files
+        ]
+
     query = select(FileModel).where(FileModel.owner_id == current_user.id)
-    
     if not include_trashed:
         query = query.where(FileModel.is_trashed == False)
-    
     if starred_only:
         query = query.where(FileModel.is_starred == True)
-    
     if path:
-        query = query.where(
-            FileModel.path.in_(get_serialized_path_variants(parse_path(path)))
-        )
-    
+        query = query.where(FileModel.path.in_(get_serialized_path_variants(raw_path)))
     result = await db.execute(query.order_by(FileModel.type, FileModel.name))
     files = result.scalars().all()
-
     return [to_file_response(file) for file in files]
 
 
@@ -426,6 +473,7 @@ async def search_files(
     date_to: Optional[datetime] = Query(None),
     starred_only: bool = Query(False),
     include_trashed: bool = Query(False),
+    shared_folder_id: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -438,7 +486,6 @@ async def search_files(
     escaped_query = escape_like_literal(normalized_query)
     like_query = f"%{escaped_query}%"
     conditions = [
-        FileModel.owner_id == current_user.id,
         or_(
             FileModel.name.ilike(like_query, escape=LIKE_ESCAPE_CHAR),
             FileModel.path.ilike(like_query, escape=LIKE_ESCAPE_CHAR),
@@ -447,6 +494,21 @@ async def search_files(
             FileModel.content_index.ilike(like_query, escape=LIKE_ESCAPE_CHAR),
         ),
     ]
+
+    access_ctx = None
+    shared_root = None
+    if shared_folder_id:
+        shared_root, access_ctx = await get_shared_root_access(db, current_user, shared_folder_id)
+        root_prefix, path_prefixes = path_prefixes_for_shared_root(shared_root)
+        conditions.append(FileModel.owner_id == shared_root.owner_id)
+        conditions.append(
+            or_(
+                FileModel.id == shared_root.id,
+                *[FileModel.path.like(prefix) for prefix in path_prefixes],
+            )
+        )
+    else:
+        conditions.append(FileModel.owner_id == current_user.id)
 
     if not include_trashed:
         conditions.append(FileModel.is_trashed == False)
@@ -468,7 +530,11 @@ async def search_files(
 
     response = []
     for file in files:
-        path_segments = parse_path(file.path)
+        path_segments = (
+            relative_path_within_shared_root(file, shared_root)
+            if shared_root is not None
+            else parse_path(file.path)
+        )
         thumb_url = f"/api/files/{file.id}/thumbnail" if file.thumbnail_path else None
         response.append(SearchResult(
             id=file.id,
@@ -480,6 +546,15 @@ async def search_files(
             is_starred=file.is_starred,
             is_trashed=file.is_trashed,
             thumbnail_url=thumb_url,
+            is_shared=bool(access_ctx and not access_ctx.is_owner),
+            is_shared_root=bool(shared_root is not None and file.id == shared_root.id),
+            shared_folder_id=access_ctx.shared_folder_id if access_ctx else None,
+            access_role=access_ctx.role if access_ctx else "owner",
+            owner_id=file.owner_id,
+            owner_username=access_ctx.owner_username if access_ctx else current_user.username,
+            can_write=access_ctx.can_write if access_ctx else True,
+            can_manage=access_ctx.can_manage if access_ctx else True,
+            can_share_public=access_ctx.can_share_public if access_ctx else True,
             created_at=file.created_at,
             updated_at=file.updated_at,
             match_context=build_match_context(file, normalized_query, path_segments),
@@ -494,12 +569,24 @@ async def upload_files(
     request: Request,
     files: List[UploadFile] = File(...),
     path: Optional[str] = Query("[]", description="Path as JSON array"),
+    shared_folder_id: Optional[str] = Query(None),
     current_user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db)
 ):
     """Upload one or more files (streamed to disk in chunks to avoid OOM)"""
-    # Ensure storage directory exists
-    user_storage_path = os.path.join(settings.storage_path, current_user.id)
+    target_path, access_ctx = await resolve_target_path(
+        db,
+        current_user,
+        parse_path(path or "[]"),
+        shared_folder_id=shared_folder_id,
+        required_role="editor",
+    )
+    target_owner = current_user if access_ctx.is_owner else await db.get(User, access_ctx.owner_id)
+    if target_owner is None:
+        raise HTTPException(status_code=404, detail="Target owner not found")
+    await ensure_folder_path_exists(db, target_owner.id, target_path)
+
+    user_storage_path = os.path.join(settings.storage_path, target_owner.id)
     os.makedirs(user_storage_path, exist_ok=True)
     
     uploaded_files = []
@@ -540,11 +627,11 @@ async def upload_files(
             raise HTTPException(status_code=500, detail=f"Failed to save file: {e}")
         
         # Check storage quota after writing
-        if current_user.storage_quota > 0 and current_user.storage_used + file_size > current_user.storage_quota:
+        if target_owner.storage_quota > 0 and target_owner.storage_used + file_size > target_owner.storage_quota:
             os.remove(storage_filepath)
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Storage quota exceeded. Available: {current_user.storage_quota - current_user.storage_used} bytes"
+                detail=f"Storage quota exceeded. Available: {target_owner.storage_quota - target_owner.storage_used} bytes"
             )
         
         # Get mime type
@@ -564,11 +651,11 @@ async def upload_files(
             type=get_file_type(safe_filename, mime_type),
             mime_type=mime_type,
             size=file_size,
-            path=normalize_path(path),
+            path=serialize_path(target_path),
             storage_path=storage_filepath,
             content_index=build_search_document(storage_filepath, safe_filename, mime_type, get_file_type(safe_filename, mime_type)),
             thumbnail_path=thumb_path,
-            owner_id=current_user.id,
+            owner_id=target_owner.id,
             is_starred=False,
             is_trashed=False,
             version=1,
@@ -588,7 +675,7 @@ async def upload_files(
         ))
         
         # Update user storage
-        current_user.storage_used += file_size
+        target_owner.storage_used += file_size
         
         # Log activity
         activity = ActivityLog(
@@ -598,7 +685,12 @@ async def upload_files(
         )
         db.add(activity)
         
-        uploaded_files.append(to_file_response(new_file))
+        response_path = (
+            relative_path_within_shared_root(new_file, access_ctx.shared_root)
+            if access_ctx.shared_root is not None
+            else None
+        )
+        uploaded_files.append(to_file_response(new_file, access_ctx, path_override=response_path))
     
     await db.flush()
     return uploaded_files
@@ -612,13 +704,26 @@ async def init_chunked_upload(
     request: Request,
     init_req: ChunkedUploadInitRequest,
     current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
 ):
     """Initialize a resumable chunked upload."""
+    target_path, access_ctx = await resolve_target_path(
+        db,
+        current_user,
+        init_req.path,
+        shared_folder_id=init_req.shared_folder_id,
+        required_role="editor",
+    )
+    target_owner = current_user if access_ctx.is_owner else await db.get(User, access_ctx.owner_id)
+    if target_owner is None:
+        raise HTTPException(status_code=404, detail="Target owner not found")
+    await ensure_folder_path_exists(db, target_owner.id, target_path)
+
     # Check overall storage quota before starting
-    if current_user.storage_quota > 0 and current_user.storage_used + init_req.total_size > current_user.storage_quota:
+    if target_owner.storage_quota > 0 and target_owner.storage_used + init_req.total_size > target_owner.storage_quota:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Storage quota exceeded. Available: {current_user.storage_quota - current_user.storage_used} bytes"
+            detail=f"Storage quota exceeded. Available: {target_owner.storage_quota - target_owner.storage_used} bytes"
         )
 
     # Per-file size limit check
@@ -637,7 +742,7 @@ async def init_chunked_upload(
         init_req.total_size,
         RESUMABLE_CHUNK_SIZE,
         filename=safe_filename,
-        path=init_req.path,
+        path=target_path,
         mime_type=init_req.mime_type,
     )
 
@@ -777,11 +882,21 @@ async def complete_chunked_upload(
         raise HTTPException(status_code=400, detail="Upload metadata does not match filename")
 
     stored_path = metadata.get("path")
-    if stored_path is not None and serialize_path(stored_path) != serialize_path(complete_req.path):
+    target_path, access_ctx = await resolve_target_path(
+        db,
+        current_user,
+        complete_req.path,
+        shared_folder_id=complete_req.shared_folder_id,
+        required_role="editor",
+    )
+    if stored_path is not None and serialize_path(stored_path) != serialize_path(target_path):
         raise HTTPException(status_code=400, detail="Upload metadata does not match target path")
 
-    target_path = stored_path if stored_path is not None else complete_req.path
-    user_storage_path = os.path.join(settings.storage_path, current_user.id)
+    target_owner = current_user if access_ctx.is_owner else await db.get(User, access_ctx.owner_id)
+    if target_owner is None:
+        raise HTTPException(status_code=404, detail="Target owner not found")
+    await ensure_folder_path_exists(db, target_owner.id, target_path)
+    user_storage_path = os.path.join(settings.storage_path, target_owner.id)
     os.makedirs(user_storage_path, exist_ok=True)
 
     file_id = str(uuid.uuid4())
@@ -855,7 +970,7 @@ async def complete_chunked_upload(
         )
 
     # Re-check storage quota (just in case it changed during upload)
-    if current_user.storage_quota > 0 and current_user.storage_used + assembled_size > current_user.storage_quota:
+    if target_owner.storage_quota > 0 and target_owner.storage_used + assembled_size > target_owner.storage_quota:
         os.remove(final_storage_filepath)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -879,10 +994,10 @@ async def complete_chunked_upload(
         type=get_file_type(safe_filename, mime_type),
         mime_type=mime_type,
         size=assembled_size,
-        path=normalize_path(serialize_path(target_path)),
+        path=serialize_path(target_path),
         storage_path=final_storage_filepath,
         thumbnail_path=thumb_path,
-        owner_id=current_user.id,
+        owner_id=target_owner.id,
         is_starred=False,
         is_trashed=False,
         version=1,
@@ -900,7 +1015,7 @@ async def complete_chunked_upload(
         created_at=now,
         created_by=current_user.id,
     ))
-    current_user.storage_used += assembled_size
+    target_owner.storage_used += assembled_size
     
     activity = ActivityLog(
         user_id=current_user.id,
@@ -911,21 +1026,12 @@ async def complete_chunked_upload(
     
     await db.flush()
 
-    thumb_url = f"/api/files/{new_file.id}/thumbnail" if new_file.thumbnail_path else None
-    return FileResponseSchema(
-        id=new_file.id,
-        name=new_file.name,
-        type=new_file.type,
-        mime_type=new_file.mime_type,
-        size=new_file.size,
-        path=parse_path(new_file.path),
-        is_starred=new_file.is_starred,
-        is_trashed=new_file.is_trashed,
-        thumbnail_url=thumb_url,
-        version=new_file.version or 1,
-        created_at=new_file.created_at,
-        updated_at=new_file.updated_at,
+    response_path = (
+        relative_path_within_shared_root(new_file, access_ctx.shared_root)
+        if access_ctx.shared_root is not None
+        else None
     )
+    return to_file_response(new_file, access_ctx, path_override=response_path)
 
 
 @router.get("/{file_id}/download")
@@ -937,15 +1043,7 @@ async def download_file(
     db: AsyncSession = Depends(get_db)
 ):
     """Download a file"""
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-    
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, _access_ctx = await get_file_access_context(db, current_user, file_id, required_role="viewer")
     
     if file.type == "folder":
         raise HTTPException(status_code=400, detail="Cannot download a folder")
@@ -997,19 +1095,11 @@ async def list_file_versions(
     db: AsyncSession = Depends(get_db),
 ):
     """Return version history for a file."""
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, access_ctx = await get_file_access_context(db, current_user, file_id, required_role="viewer")
     if file.type == "folder":
         raise HTTPException(status_code=400, detail="Folders do not support version history")
 
-    await ensure_base_version(file, db, current_user.id)
+    await ensure_base_version(file, db, file.owner_id)
 
     versions_result = await db.execute(
         select(FileVersion)
@@ -1043,23 +1133,18 @@ async def upload_new_version(
     db: AsyncSession = Depends(get_db),
 ):
     """Upload a new version of an existing file."""
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, access_ctx = await get_file_access_context(db, current_user, file_id, required_role="editor")
     if file.type == "folder":
         raise HTTPException(status_code=400, detail="Folders do not support versions")
     if file.is_trashed:
         raise HTTPException(status_code=400, detail="Restore the file before adding versions")
 
-    await ensure_base_version(file, db, current_user.id)
+    await ensure_base_version(file, db, file.owner_id)
 
-    user_storage_path = os.path.join(settings.storage_path, current_user.id)
+    owner_user = current_user if access_ctx.is_owner else await db.get(User, file.owner_id)
+    if owner_user is None:
+        raise HTTPException(status_code=404, detail="File owner not found")
+    user_storage_path = os.path.join(settings.storage_path, file.owner_id)
     os.makedirs(user_storage_path, exist_ok=True)
 
     safe_filename = sanitize_filename(new_file.filename or file.name)
@@ -1091,11 +1176,11 @@ async def upload_new_version(
             os.remove(storage_filepath)
         raise HTTPException(status_code=500, detail=f"Failed to save version: {exc}")
 
-    if current_user.storage_quota > 0 and current_user.storage_used + file_size > current_user.storage_quota:
+    if owner_user.storage_quota > 0 and owner_user.storage_used + file_size > owner_user.storage_quota:
         os.remove(storage_filepath)
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Storage quota exceeded. Available: {current_user.storage_quota - current_user.storage_used} bytes"
+            detail=f"Storage quota exceeded. Available: {owner_user.storage_quota - owner_user.storage_used} bytes"
         )
 
     mime_type = new_file.content_type or mimetypes.guess_type(safe_filename)[0] or file.mime_type
@@ -1146,7 +1231,7 @@ async def upload_new_version(
             file.version = next_version
             file.storage_path = storage_filepath
 
-    current_user.storage_used += file_size
+    owner_user.storage_used += file_size
 
     activity = ActivityLog(
         user_id=current_user.id,
@@ -1156,7 +1241,12 @@ async def upload_new_version(
     db.add(activity)
     await db.flush()
     await db.refresh(file)
-    return to_file_response(file)
+    response_path = (
+        relative_path_within_shared_root(file, access_ctx.shared_root)
+        if access_ctx.shared_root is not None
+        else None
+    )
+    return to_file_response(file, access_ctx, path_override=response_path)
 
 
 @router.get("/{file_id}/versions/{version_id}/download")
@@ -1169,14 +1259,7 @@ async def download_version(
     db: AsyncSession = Depends(get_db),
 ):
     """Download a specific version of a file."""
-    file_result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = file_result.scalar_one_or_none()
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, _access_ctx = await get_file_access_context(db, current_user, file_id, required_role="viewer")
 
     version_result = await db.execute(
         select(FileVersion).where(
@@ -1225,20 +1308,13 @@ async def restore_file_version(
     db: AsyncSession = Depends(get_db),
 ):
     """Restore a previous version by creating a new latest version from it."""
-    file_result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = file_result.scalar_one_or_none()
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, access_ctx = await get_file_access_context(db, current_user, file_id, required_role="admin")
     if file.type == "folder":
         raise HTTPException(status_code=400, detail="Folders do not support versions")
     if file.is_trashed:
         raise HTTPException(status_code=400, detail="Restore the file before restoring versions")
 
-    await ensure_base_version(file, db, current_user.id)
+    await ensure_base_version(file, db, file.owner_id)
 
     version_result = await db.execute(
         select(FileVersion).where(
@@ -1257,13 +1333,16 @@ async def restore_file_version(
             detail=f"Version exceeds maximum allowed size of {settings.max_file_size_bytes} bytes."
         )
 
-    if current_user.storage_quota > 0 and current_user.storage_used + version.size > current_user.storage_quota:
+    owner_user = current_user if access_ctx.is_owner else await db.get(User, file.owner_id)
+    if owner_user is None:
+        raise HTTPException(status_code=404, detail="File owner not found")
+    if owner_user.storage_quota > 0 and owner_user.storage_used + version.size > owner_user.storage_quota:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Storage quota exceeded."
         )
 
-    user_storage_path = os.path.join(settings.storage_path, current_user.id)
+    user_storage_path = os.path.join(settings.storage_path, file.owner_id)
     os.makedirs(user_storage_path, exist_ok=True)
 
     next_version = await get_next_version_number(db, file.id)
@@ -1327,7 +1406,7 @@ async def restore_file_version(
     # Build the content index once using the final storage path (after any retries).
     file.content_index = build_search_document(new_storage_path, file.name, version.mime_type, file.type)
 
-    current_user.storage_used += version.size
+    owner_user.storage_used += version.size
     activity = ActivityLog(
         user_id=current_user.id,
         action="version_restore",
@@ -1337,7 +1416,12 @@ async def restore_file_version(
 
     await db.flush()
     await db.refresh(file)
-    return to_file_response(file)
+    response_path = (
+        relative_path_within_shared_root(file, access_ctx.shared_root)
+        if access_ctx.shared_root is not None
+        else None
+    )
+    return to_file_response(file, access_ctx, path_override=response_path)
 
 
 @router.delete("/{file_id}/versions/{version_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1350,14 +1434,7 @@ async def delete_file_version(
     db: AsyncSession = Depends(get_db),
 ):
     """Delete a specific historical version."""
-    file_result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = file_result.scalar_one_or_none()
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, access_ctx = await get_file_access_context(db, current_user, file_id, required_role="admin")
 
     version_result = await db.execute(
         select(FileVersion).where(
@@ -1379,7 +1456,9 @@ async def delete_file_version(
 
     freed = version.size or 0
     await db.delete(version)
-    current_user.storage_used = max(0, current_user.storage_used - freed)
+    owner_user = current_user if access_ctx.is_owner else await db.get(User, file.owner_id)
+    if owner_user is not None:
+        owner_user.storage_used = max(0, owner_user.storage_used - freed)
     activity = ActivityLog(
         user_id=current_user.id,
         action="version_delete",
@@ -1398,15 +1477,9 @@ async def copy_file(
     """Copy a file (creates a duplicate with '(copy)' suffix)"""
     import shutil
 
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    original = result.scalar_one_or_none()
-
-    if not original:
-        raise HTTPException(status_code=404, detail="File not found")
+    original, access_ctx = await get_file_access_context(db, current_user, file_id, required_role="viewer")
+    if not access_ctx.is_owner:
+        raise HTTPException(status_code=403, detail="Only the owner can create local copies from this view")
 
     if original.type == "folder":
         raise HTTPException(status_code=400, detail="Folder copy is not supported")
@@ -1502,15 +1575,10 @@ async def update_file(
     db: AsyncSession = Depends(get_db)
 ):
     """Update file (rename, move, star)"""
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-    
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    required_role = "owner" if update.is_starred is not None else "editor"
+    file, access_ctx = await get_file_access_context(db, current_user, file_id, required_role=required_role)
+    if update.is_starred is not None and not access_ctx.is_owner:
+        raise HTTPException(status_code=403, detail="Only the owner can change starred status")
 
     old_path = parse_path(file.path)
     old_full_path = old_path + [file.name]
@@ -1528,7 +1596,9 @@ async def update_file(
 
     if update.path is not None:
         normalized_path = normalize_tree_path(update.path)
-        await ensure_folder_path_exists(db, current_user.id, normalized_path)
+        if access_ctx.shared_root is not None:
+            normalized_path = parse_shared_path(access_ctx.shared_root.path) + [access_ctx.shared_root.name] + normalized_path
+        await ensure_folder_path_exists(db, file.owner_id, normalized_path)
 
         if file.type == "folder" and normalized_path[:len(old_full_path)] == old_full_path:
             raise HTTPException(status_code=400, detail="Cannot move a folder into itself")
@@ -1565,7 +1635,7 @@ async def update_file(
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
-                    FileModel.owner_id == current_user.id,
+                    FileModel.owner_id == file.owner_id,
                     FileModel.id != file.id,
                     or_(*[
                         FileModel.path.like(prefix, escape=LIKE_ESCAPE_CHAR)
@@ -1584,7 +1654,12 @@ async def update_file(
     await db.flush()
     await db.refresh(file)
     
-    return to_file_response(file)
+    response_path = (
+        relative_path_within_shared_root(file, access_ctx.shared_root)
+        if access_ctx.shared_root is not None
+        else None
+    )
+    return to_file_response(file, access_ctx, path_override=response_path)
 
 
 @router.post("/{file_id}/trash", response_model=FileResponseSchema)
@@ -1596,15 +1671,7 @@ async def trash_file(
     db: AsyncSession = Depends(get_db)
 ):
     """Move file or folder to trash (recursive for folders)"""
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-    
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, access_ctx = await get_file_access_context(db, current_user, file_id, required_role="admin")
     
     now = datetime.now(timezone.utc)
     file.is_trashed = True
@@ -1619,7 +1686,7 @@ async def trash_file(
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
-                    FileModel.owner_id == current_user.id,
+                    FileModel.owner_id == file.owner_id,
                     or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
                     FileModel.is_trashed == False,
                 )
@@ -1633,7 +1700,6 @@ async def trash_file(
     await db.execute(
         sql_update(ShareLink)
         .where(
-            ShareLink.owner_id == current_user.id,
             ShareLink.file_id.in_(affected_ids),
             ShareLink.is_active.is_(True),
         )
@@ -1650,7 +1716,12 @@ async def trash_file(
     await db.flush()
     await db.refresh(file)
     
-    return to_file_response(file)
+    response_path = (
+        relative_path_within_shared_root(file, access_ctx.shared_root)
+        if access_ctx.shared_root is not None
+        else None
+    )
+    return to_file_response(file, access_ctx, path_override=response_path)
 
 
 @router.post("/{file_id}/restore", response_model=FileResponseSchema)
@@ -1662,15 +1733,7 @@ async def restore_file(
     db: AsyncSession = Depends(get_db)
 ):
     """Restore file or folder from trash (recursive for folders)"""
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-    
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, access_ctx = await get_file_access_context(db, current_user, file_id, required_role="admin", allow_trashed=True)
     
     file.is_trashed = False
     file.trashed_at = None
@@ -1683,7 +1746,7 @@ async def restore_file(
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
-                    FileModel.owner_id == current_user.id,
+                    FileModel.owner_id == file.owner_id,
                     or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
                     FileModel.is_trashed == True,
                 )
@@ -1703,7 +1766,12 @@ async def restore_file(
     await db.flush()
     await db.refresh(file)
     
-    return to_file_response(file)
+    response_path = (
+        relative_path_within_shared_root(file, access_ctx.shared_root)
+        if access_ctx.shared_root is not None
+        else None
+    )
+    return to_file_response(file, access_ctx, path_override=response_path)
 
 
 @router.delete("/{file_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -1715,15 +1783,7 @@ async def delete_file_permanently(
     db: AsyncSession = Depends(get_db)
 ):
     """Permanently delete a file or folder (recursive for folders)"""
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-    
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, access_ctx = await get_file_access_context(db, current_user, file_id, required_role="admin", allow_trashed=True)
     
     freed_bytes = 0
 
@@ -1734,7 +1794,7 @@ async def delete_file_permanently(
         children_result = await db.execute(
             select(FileModel).where(
                 and_(
-                    FileModel.owner_id == current_user.id,
+                    FileModel.owner_id == file.owner_id,
                     or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
                 )
             )
@@ -1743,7 +1803,9 @@ async def delete_file_permanently(
             freed_bytes += await purge_file(db, child)
 
     freed_bytes += await purge_file(db, file)
-    current_user.storage_used = max(0, current_user.storage_used - freed_bytes)
+    owner_user = current_user if access_ctx.is_owner else await db.get(User, file.owner_id)
+    if owner_user is not None:
+        owner_user.storage_used = max(0, owner_user.storage_used - freed_bytes)
     await db.flush()
 
 
@@ -1759,16 +1821,7 @@ async def preview_file(
     db: AsyncSession = Depends(get_db)
 ):
     """Serve file content inline for preview. Authenticated via Authorization header."""
-
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-
-    if not file:
-        raise HTTPException(status_code=404, detail="File not found")
+    file, _access_ctx = await get_file_access_context(db, current_user, file_id, required_role="viewer")
 
     if file.type not in PREVIEWABLE_TYPES:
         raise HTTPException(status_code=400, detail="This file type cannot be previewed")
@@ -1863,14 +1916,8 @@ async def get_thumbnail(
     db: AsyncSession = Depends(get_db)
 ):
     """Serve a file's thumbnail image. Authenticated via Authorization header."""
-    
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == file_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    file = result.scalar_one_or_none()
-    
+
+    file, _access_ctx = await get_file_access_context(db, current_user, file_id, required_role="viewer")
     if not file or not file.thumbnail_path:
         raise HTTPException(status_code=404, detail="Thumbnail not found")
     

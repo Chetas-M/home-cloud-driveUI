@@ -34,15 +34,15 @@ export default function ContextMenu({
         { icon: Eye, label: "Preview", action: onPreview, show: file.type !== "folder" },
         { icon: Download, label: "Download", action: onDownload, show: file.type !== "folder" },
         { divider: true },
-        { icon: isStarred ? StarOff : Star, label: isStarred ? "Unstar" : "Star", action: onStar },
-        { icon: Edit3, label: "Rename", action: onRename },
-        { icon: FolderInput, label: "Move to...", action: onMove },
-        { icon: Copy, label: "Make a copy", action: onCopy, show: file.type !== "folder" },
-        { icon: Share2, label: "Share", action: onShare, show: file.type !== "folder" },
+        { icon: isStarred ? StarOff : Star, label: isStarred ? "Unstar" : "Star", action: onStar, show: !file.is_shared || file.can_share_public },
+        { icon: Edit3, label: "Rename", action: onRename, show: file.can_write },
+        { icon: FolderInput, label: "Move to...", action: onMove, show: file.can_write },
+        { icon: Copy, label: "Make a copy", action: onCopy, show: file.type !== "folder" && !file.is_shared },
+        { icon: Share2, label: file.type === "folder" ? "Manage access" : "Share", action: onShare, show: file.type === "folder" ? file.can_manage && (!file.is_shared || file.is_shared_root) : file.can_share_public },
         { divider: true },
         { icon: History, label: "Version history", action: onVersions, show: file.type !== "folder" },
         { icon: Info, label: "Details", action: onDetails },
-        { icon: Trash2, label: "Move to Trash", action: onTrash, danger: true },
+        { icon: Trash2, label: "Move to Trash", action: onTrash, danger: true, show: file.can_manage },
     ];
 
     const handleClick = (action) => {

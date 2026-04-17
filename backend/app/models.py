@@ -37,6 +37,12 @@ class User(Base):
     # Relationships
     files = relationship("File", back_populates="owner", cascade="all, delete-orphan")
     sessions = relationship("UserSession", back_populates="user", cascade="all, delete-orphan")
+    shared_folder_accesses = relationship(
+        "SharedFolderAccess",
+        back_populates="user",
+        cascade="all, delete-orphan",
+        foreign_keys="SharedFolderAccess.user_id",
+    )
 
 
 class File(Base):
@@ -107,6 +113,27 @@ class ShareLink(Base):
     # Relationships
     file = relationship("File")
     owner = relationship("User")
+
+
+class SharedFolderAccess(Base):
+    __tablename__ = "shared_folders"
+    __table_args__ = (
+        UniqueConstraint("folder_id", "user_id", name="uq_shared_folders_folder_user"),
+    )
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    folder_id = Column(String(36), ForeignKey("files.id", ondelete="CASCADE"), nullable=False, index=True)
+    owner_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    user_id = Column(String(36), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    role = Column(String(20), nullable=False, default="viewer")  # viewer | editor | admin
+    invited_by = Column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
+
+    folder = relationship("File")
+    owner = relationship("User", foreign_keys=[owner_id])
+    user = relationship("User", back_populates="shared_folder_accesses", foreign_keys=[user_id])
+    invited_by_user = relationship("User", foreign_keys=[invited_by])
 
 
 class ActivityLog(Base):

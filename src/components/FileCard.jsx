@@ -176,6 +176,9 @@ export default function FileCard({
                 <div className="file-info">
                     <div>
                         <div className="file-name">{file.name}</div>
+                        {file.is_shared && file.owner_username && (
+                            <div className="file-size">Shared by {file.owner_username}</div>
+                        )}
                         {file.type !== "folder" && (
                             <div className="file-size">{formatSize(file.size)}</div>
                         )}
@@ -190,6 +193,9 @@ export default function FileCard({
             ) : (
                 <>
                     <div className="file-name">{file.name}</div>
+                    {file.is_shared && file.owner_username && (
+                        <div className="file-size">Shared by {file.owner_username}</div>
+                    )}
                     {file.type !== "folder" && (
                         <div className="file-size">{formatSize(file.size)}</div>
                     )}

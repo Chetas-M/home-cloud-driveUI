@@ -116,6 +116,7 @@ class ChunkedUploadInitRequest(BaseModel):
     total_size: int = Field(..., ge=0)
     path: List[str] = Field(default_factory=list)
     mime_type: Optional[str] = None
+    shared_folder_id: Optional[str] = None
 
 
 class ChunkedUploadInitResponse(BaseModel):
@@ -129,6 +130,7 @@ class ChunkedUploadCompleteRequest(BaseModel):
     total_size: int = Field(..., ge=0)
     path: List[str] = Field(default_factory=list)
     mime_type: Optional[str] = None
+    shared_folder_id: Optional[str] = None
 
 
 class ChunkedUploadStatusResponse(BaseModel):
@@ -155,6 +157,15 @@ class FileResponse(BaseModel):
     is_trashed: bool
     thumbnail_url: Optional[str] = None
     version: int = 1
+    is_shared: bool = False
+    is_shared_root: bool = False
+    shared_folder_id: Optional[str] = None
+    access_role: Optional[str] = None
+    owner_id: Optional[str] = None
+    owner_username: Optional[str] = None
+    can_write: bool = False
+    can_manage: bool = False
+    can_share_public: bool = False
     created_at: datetime
     updated_at: datetime
 
@@ -190,6 +201,7 @@ class FileVersionResponse(BaseModel):
 class FolderCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     path: List[str] = Field(default_factory=list)
+    shared_folder_id: Optional[str] = None
 
 
 # ============ STORAGE SCHEMAS ============
@@ -278,6 +290,27 @@ class ShareLinkResponse(BaseModel):
 
     class Config:
         from_attributes = True
+
+
+class SharedFolderInviteCreate(BaseModel):
+    identifier: str = Field(..., min_length=1, max_length=255)
+    role: Literal["viewer", "editor", "admin"] = "viewer"
+
+
+class SharedFolderAccessUpdate(BaseModel):
+    role: Literal["viewer", "editor", "admin"]
+
+
+class SharedFolderAccessResponse(BaseModel):
+    id: str
+    folder_id: str
+    role: str
+    created_at: datetime
+    updated_at: datetime
+    user_id: str
+    username: str
+    email: str
+    invited_by: Optional[str] = None
 
 
 # ============ SEARCH SCHEMAS ============

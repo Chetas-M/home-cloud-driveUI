@@ -225,6 +225,7 @@ class ApiService {
         params.append('path', JSON.stringify(path));
         if (options.includeTrash) params.append('include_trashed', 'true');
         if (options.starredOnly) params.append('starred_only', 'true');
+        if (options.sharedFolderId) params.append('shared_folder_id', options.sharedFolderId);
 
         return this.request(`/files?${params.toString()}`);
     }
@@ -255,7 +256,7 @@ class ApiService {
      * @param {Function} onProgress - Callback: ({ loaded, total, percent, speed, eta })
      * @returns {{ promise: Promise, abort: Function }}
      */
-    uploadFileWithProgress(file, path = [], onProgress) {
+    uploadFileWithProgress(file, path = [], onProgress, options = {}) {
         let isAborted = false;
         let currentXhr = null;
 
@@ -297,6 +298,7 @@ class ApiService {
                         const candidate = await this.getUploadStatus(sessions[fingerprint].upload_id);
                         const candidatePath = Array.isArray(candidate.path) ? candidate.path : [];
                         const pathMatches =
+                            options.sharedFolderId ||
                             candidate.path === undefined ||
                             candidatePath.length === 0 ||
                             JSON.stringify(candidatePath) === JSON.stringify(path || []);
@@ -318,6 +320,9 @@ class ApiService {
                         total_size: file.size,
                         path: path,
                     };
+                    if (options.sharedFolderId) {
+                        initPayload.shared_folder_id = options.sharedFolderId;
+                    }
                     if (file.type) {
                         initPayload.mime_type = file.type;
                     }
@@ -489,6 +494,7 @@ class ApiService {
                         filename: file.name,
                         total_size: file.size,
                         path: path,
+                        shared_folder_id: options.sharedFolderId || undefined,
                         mime_type: file.type || undefined,
                     }),
                 });
@@ -597,15 +603,43 @@ class ApiService {
     }
 
     // ============ FOLDERS ============
-    async createFolder(name, path = []) {
+    async createFolder(name, path = [], options = {}) {
         return this.request('/folders', {
             method: 'POST',
-            body: JSON.stringify({ name, path }),
+            body: JSON.stringify({ name, path, shared_folder_id: options.sharedFolderId || undefined }),
         });
     }
 
     async deleteFolder(folderId) {
         return this.request(`/folders/${folderId}`, {
+            method: 'DELETE',
+        });
+    }
+
+    async getSharedFolders() {
+        return this.request('/shared-folders');
+    }
+
+    async getFolderAccess(folderId) {
+        return this.request(`/shared-folders/${folderId}/access`);
+    }
+
+    async inviteFolderAccess(folderId, identifier, role) {
+        return this.request(`/shared-folders/${folderId}/access`, {
+            method: 'POST',
+            body: JSON.stringify({ identifier, role }),
+        });
+    }
+
+    async updateFolderAccess(folderId, accessId, role) {
+        return this.request(`/shared-folders/${folderId}/access/${accessId}`, {
+            method: 'PATCH',
+            body: JSON.stringify({ role }),
+        });
+    }
+
+    async removeFolderAccess(folderId, accessId) {
+        return this.request(`/shared-folders/${folderId}/access/${accessId}`, {
             method: 'DELETE',
         });
     }
@@ -711,6 +745,7 @@ class ApiService {
         if (filters.dateTo) params.append('date_to', filters.dateTo);
         if (filters.starredOnly) params.append('starred_only', 'true');
         if (filters.includeTrash) params.append('include_trashed', 'true');
+        if (filters.sharedFolderId) params.append('shared_folder_id', filters.sharedFolderId);
 
         return this.request(`/files/search?${params.toString()}`);
     }

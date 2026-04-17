@@ -95,17 +95,21 @@ export default function FileDetailsPanel({
                         <span>Download</span>
                     </button>
                 )}
-                <button className="details-action-btn" onClick={() => onStar(file.id)}>
-                    {isStarred ? <StarOff size={18} /> : <Star size={18} />}
-                    <span>{isStarred ? "Unstar" : "Star"}</span>
-                </button>
-                <button
-                    className="details-action-btn danger"
-                    onClick={() => onTrash(file.id)}
-                >
-                    <Trash2 size={18} />
-                    <span>Trash</span>
-                </button>
+                {(!file.is_shared || file.can_share_public) && (
+                    <button className="details-action-btn" onClick={() => onStar(file.id)}>
+                        {isStarred ? <StarOff size={18} /> : <Star size={18} />}
+                        <span>{isStarred ? "Unstar" : "Star"}</span>
+                    </button>
+                )}
+                {file.can_manage && (
+                    <button
+                        className="details-action-btn danger"
+                        onClick={() => onTrash(file.id)}
+                    >
+                        <Trash2 size={18} />
+                        <span>Trash</span>
+                    </button>
+                )}
                 {file.type !== "folder" && (
                     <button className="details-action-btn" onClick={onShowVersions}>
                         <History size={18} />
@@ -146,6 +150,14 @@ export default function FileDetailsPanel({
                         /{file.path.length > 0 ? file.path.join("/") : "Home"}
                     </span>
                 </div>
+                {file.is_shared && file.owner_username && (
+                    <div className="metadata-item">
+                        <span className="metadata-label">
+                            <Folder size={14} /> Owner
+                        </span>
+                        <span className="metadata-value">{file.owner_username}</span>
+                    </div>
+                )}
                 {file.type !== "folder" && (
                     <div className="metadata-item">
                         <span className="metadata-label">

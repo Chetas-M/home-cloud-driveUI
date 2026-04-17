@@ -297,7 +297,7 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 app.add_middleware(SlowAPIMiddleware)
 
 # Import additional routers
-from app.routers import admin, sharing
+from app.routers import admin, sharing, shared_folders
 
 # Include routers
 app.include_router(auth.router)
@@ -306,6 +306,7 @@ app.include_router(folders.router)
 app.include_router(storage.router)
 app.include_router(admin.router)
 app.include_router(sharing.router)
+app.include_router(shared_folders.router)
 
 
 @app.get("/")
