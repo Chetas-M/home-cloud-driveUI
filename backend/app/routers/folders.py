@@ -12,7 +12,8 @@ from app.database import get_db
 from app.models import User, File as FileModel, ActivityLog, ShareLink
 from app.schemas import FolderCreate, FileResponse as FileResponseSchema
 from app.auth import get_current_user
-from app.tree_validation import normalize_tree_path, sanitize_tree_name, ensure_folder_path_exists
+from app.shared_access import get_file_access_context, relative_path_within_shared_root, resolve_target_path
+from app.tree_validation import sanitize_tree_name, ensure_folder_path_exists
 
 router = APIRouter(prefix="/api/folders", tags=["Folders"])
 
@@ -51,14 +52,21 @@ async def create_folder(
 ):
     """Create a new folder"""
     normalized_name = sanitize_tree_name(folder.name)
-    normalized_path = normalize_tree_path(folder.path)
-    await ensure_folder_path_exists(db, current_user.id, normalized_path)
+    normalized_path, access_ctx = await resolve_target_path(
+        db,
+        current_user,
+        folder.path,
+        shared_folder_id=folder.shared_folder_id,
+        required_role="editor",
+    )
+    owner_id = access_ctx.owner_id
+    await ensure_folder_path_exists(db, owner_id, normalized_path)
 
     # Check if folder with same name exists in same path
     existing = await db.execute(
         select(FileModel).where(
             and_(
-                FileModel.owner_id == current_user.id,
+                FileModel.owner_id == owner_id,
                 FileModel.name == normalized_name,
                 FileModel.path.in_(get_serialized_path_variants(normalized_path)),
                 FileModel.type == "folder",
@@ -78,7 +86,7 @@ async def create_folder(
         type="folder",
         size=0,
         path=serialize_path(normalized_path),
-        owner_id=current_user.id,
+        owner_id=owner_id,
         version=1,
     )
     
@@ -95,16 +103,30 @@ async def create_folder(
     await db.flush()
     await db.refresh(new_folder)
     
+    path_override = (
+        relative_path_within_shared_root(new_folder, access_ctx.shared_root)
+        if access_ctx.shared_root is not None
+        else None
+    )
     return FileResponseSchema(
         id=new_folder.id,
         name=new_folder.name,
         type=new_folder.type,
         mime_type=new_folder.mime_type,
         size=new_folder.size,
-        path=parse_path(new_folder.path),
+        path=path_override if path_override is not None else parse_path(new_folder.path),
         is_starred=new_folder.is_starred,
         is_trashed=new_folder.is_trashed,
         version=new_folder.version or 1,
+        is_shared=not access_ctx.is_owner,
+        is_shared_root=False,
+        shared_folder_id=access_ctx.shared_folder_id,
+        access_role=access_ctx.role,
+        owner_id=new_folder.owner_id,
+        owner_username=access_ctx.owner_username,
+        can_write=access_ctx.can_write,
+        can_manage=access_ctx.can_manage,
+        can_share_public=access_ctx.can_share_public,
         created_at=new_folder.created_at,
         updated_at=new_folder.updated_at,
     )
@@ -117,15 +139,7 @@ async def delete_folder(
     db: AsyncSession = Depends(get_db)
 ):
     """Delete a folder and all its contents (move to trash)"""
-    result = await db.execute(
-        select(FileModel).where(
-            and_(FileModel.id == folder_id, FileModel.owner_id == current_user.id)
-        )
-    )
-    folder = result.scalar_one_or_none()
-    
-    if not folder:
-        raise HTTPException(status_code=404, detail="Folder not found")
+    folder, _access_ctx = await get_file_access_context(db, current_user, folder_id, required_role="admin")
     
     if folder.type != "folder":
         raise HTTPException(status_code=400, detail="Not a folder")
@@ -139,7 +153,7 @@ async def delete_folder(
     children_result = await db.execute(
         select(FileModel).where(
             and_(
-                FileModel.owner_id == current_user.id,
+                FileModel.owner_id == folder.owner_id,
                 or_(*[FileModel.path.like(prefix) for prefix in folder_path_prefixes]),
             )
         )
@@ -168,7 +182,6 @@ async def delete_folder(
     await db.execute(
         sql_update(ShareLink)
         .where(
-            ShareLink.owner_id == current_user.id,
             ShareLink.file_id.in_(affected_ids),
             ShareLink.is_active == True,
         )
