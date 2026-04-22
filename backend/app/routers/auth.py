@@ -2,6 +2,7 @@
 Home Cloud Drive - Authentication Router
 """
 from datetime import datetime, timedelta, timezone
+import ipaddress
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from anyio import to_thread
@@ -110,15 +111,27 @@ def build_password_reset_url(request: Request, token: str) -> str:
 
 def get_client_ip(request: Request) -> str:
     """Extract the most useful client IP available for session tracking."""
+    def parse_ip(value: str | None) -> str | None:
+        if not value:
+            return None
+        candidate = value.split(",", 1)[0].strip()
+        if not candidate:
+            return None
+        try:
+            return str(ipaddress.ip_address(candidate))
+        except ValueError:
+            return None
+
     if settings.trust_proxy_headers:
-        forwarded_for = request.headers.get("x-forwarded-for")
-        if forwarded_for:
-            return forwarded_for.split(",")[0].strip()
-        real_ip = request.headers.get("x-real-ip")
+        forwarded_ip = parse_ip(request.headers.get("x-forwarded-for"))
+        if forwarded_ip:
+            return forwarded_ip
+        real_ip = parse_ip(request.headers.get("x-real-ip"))
         if real_ip:
-            return real_ip.strip()
-    if request.client and request.client.host:
-        return request.client.host
+            return real_ip
+    direct_ip = parse_ip(request.client.host) if request.client and request.client.host else None
+    if direct_ip:
+        return direct_ip
     return "Unknown IP"
 
 

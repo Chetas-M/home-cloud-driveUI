@@ -82,6 +82,21 @@ class PasswordResetUrlTests(unittest.TestCase):
 
         self.assertEqual(client_ip, "198.51.100.20")
 
+    def test_client_ip_ignores_invalid_forwarded_header_and_falls_back(self):
+        auth_router.settings.trust_proxy_headers = True
+        request = make_request(
+            "app.example.com",
+            headers={
+                "x-forwarded-for": "not-an-ip",
+                "x-real-ip": "198.51.100.21",
+            },
+            client_host="203.0.113.44",
+        )
+
+        client_ip = auth_router.get_client_ip(request)
+
+        self.assertEqual(client_ip, "198.51.100.21")
+
 
 if __name__ == "__main__":
     unittest.main()
