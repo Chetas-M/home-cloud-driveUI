@@ -23,5 +23,11 @@ def escape_like_literal(value: str) -> str:
 
 
 def prefix_like_pattern(value: str) -> str:
-    """Build a LIKE prefix pattern that treats the prefix as a literal string."""
+    """Build a LIKE prefix pattern that treats the prefix as a literal string.
+
+    The returned pattern contains backslash escapes produced by
+    ``escape_like_literal()``. When using it with SQLAlchemy ``like()`` or
+    ``ilike()``, callers must pass ``escape=LIKE_ESCAPE_CHAR`` so the escaping
+    is interpreted consistently across databases.
+    """
     return f"{escape_like_literal(value)}%"
