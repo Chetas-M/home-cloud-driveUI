@@ -249,9 +249,9 @@ class AdminUserResponse(BaseModel):
 
 
 class AdminUserUpdate(BaseModel):
-    storage_quota: Optional[int] = None
+    storage_quota: Optional[int] = Field(None, ge=0)
     is_admin: Optional[bool] = None
-    username: Optional[str] = None
+    username: Optional[str] = Field(None, min_length=3, max_length=50)
     email: Optional[EmailStr] = None
 
 
