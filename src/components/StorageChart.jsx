@@ -40,8 +40,9 @@ export default function StorageChart({ files, storageInfo }) {
     const usedStorage = storageInfo?.used || total;
     const usedPercent = maxStorage > 0 ? ((usedStorage / maxStorage) * 100).toFixed(1) : "0.0";
 
-    const formatSize = (bytes) => {
-        if (bytes === 0) return "0 B";
+    const formatSize = (bytes = 0) => {
+        if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+        if (bytes < 1024) return `${bytes} B`;
         const tb = bytes / (1024 * 1024 * 1024 * 1024);
         if (tb >= 1) return `${tb.toFixed(2)} TB`;
         const gb = bytes / (1024 * 1024 * 1024);
