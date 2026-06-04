@@ -78,6 +78,7 @@ flowchart LR
         FileUI[File explorer UI]
         SecurityUI[Security / sessions / 2FA UI]
         ShareUI[Share link UI]
+        SharedFolderUI[Shared folder UI]
         AdminUI[Admin panel UI]
     end
 
@@ -88,11 +89,13 @@ flowchart LR
         FoldersRouter[folders router]
         StorageRouter[storage router]
         ShareRouter[sharing router]
+        SharedFoldersRouter[shared folders router]
         AdminRouter[admin router]
         AuthSvc[auth.py]
         SearchSvc[search_index.py]
         ThumbSvc[thumbnails.py]
         EmailSvc[email_service.py]
+        SharedAccessSvc[shared_access.py]
         Config[config.py]
         DBSession[database.py]
     end
@@ -106,11 +109,13 @@ flowchart LR
     AppShell --> FileUI
     AppShell --> SecurityUI
     AppShell --> ShareUI
+    AppShell --> SharedFolderUI
     AppShell --> AdminUI
     AuthUI --> ApiClient
     FileUI --> ApiClient
     SecurityUI --> ApiClient
     ShareUI --> ApiClient
+    SharedFolderUI --> ApiClient
     AdminUI --> ApiClient
 
     ApiClient --> Main
@@ -119,6 +124,7 @@ flowchart LR
     Main --> FoldersRouter
     Main --> StorageRouter
     Main --> ShareRouter
+    Main --> SharedFoldersRouter
     Main --> AdminRouter
 
     AuthRouter --> AuthSvc
@@ -130,6 +136,10 @@ flowchart LR
     FoldersRouter --> DBSession
     StorageRouter --> DBSession
     ShareRouter --> DBSession
+    SharedFoldersRouter --> DBSession
+    SharedFoldersRouter --> SharedAccessSvc
+    FilesRouter --> SharedAccessSvc
+    FoldersRouter --> SharedAccessSvc
     AdminRouter --> DBSession
     DBSession --> DB
     FilesRouter --> Disk
@@ -144,6 +154,7 @@ Frontend code entry points:
 - [src/components/AuthPage.jsx](/D:/New%20folder/rs/src/components/AuthPage.jsx)
 - [src/components/SecurityModal.jsx](/D:/New%20folder/rs/src/components/SecurityModal.jsx)
 - [src/components/ShareModal.jsx](/D:/New%20folder/rs/src/components/ShareModal.jsx)
+- [src/components/SharedFolderModal.jsx](/D:/New%20folder/rs/src/components/SharedFolderModal.jsx)
 - [src/components/AdminPanel.jsx](/D:/New%20folder/rs/src/components/AdminPanel.jsx)
 
 Backend code entry points:
@@ -156,23 +167,27 @@ Backend code entry points:
 - [backend/app/search_index.py](/D:/New%20folder/rs/backend/app/search_index.py)
 - [backend/app/thumbnails.py](/D:/New%20folder/rs/backend/app/thumbnails.py)
 - [backend/app/email_service.py](/D:/New%20folder/rs/backend/app/email_service.py)
+- [backend/app/shared_access.py](/D:/New%20folder/rs/backend/app/shared_access.py)
 - [backend/app/limiter.py](/D:/New%20folder/rs/backend/app/limiter.py)
 - [backend/app/routers/auth.py](/D:/New%20folder/rs/backend/app/routers/auth.py)
 - [backend/app/routers/files.py](/D:/New%20folder/rs/backend/app/routers/files.py)
 - [backend/app/routers/folders.py](/D:/New%20folder/rs/backend/app/routers/folders.py)
 - [backend/app/routers/storage.py](/D:/New%20folder/rs/backend/app/routers/storage.py)
 - [backend/app/routers/sharing.py](/D:/New%20folder/rs/backend/app/routers/sharing.py)
+- [backend/app/routers/shared_folders.py](/D:/New%20folder/rs/backend/app/routers/shared_folders.py)
 - [backend/app/routers/admin.py](/D:/New%20folder/rs/backend/app/routers/admin.py)
 
 ## 3. Major Backend Responsibilities
 
-- [backend/app/main.py](/D:/New%20folder/rs/backend/app/main.py): bootstraps FastAPI, applies CORS and SlowAPI middleware, registers routers, exposes loopback-only `/health`, creates directories, initializes the database, runs startup migrations, launches search-index backfill, and cleans up aged trash on startup.
+- [backend/app/main.py](/D:/New%20folder/rs/backend/app/main.py): bootstraps FastAPI, applies CORS and SlowAPI middleware, registers routers, exposes loopback-only `/health`, creates directories, initializes the database, runs startup migrations, launches search-index backfill, cleans up aged trash on startup, and runs daily activity-log retention cleanup.
 - [backend/app/auth.py](/D:/New%20folder/rs/backend/app/auth.py): hashes and verifies passwords, signs and validates JWTs, creates password reset and temporary 2FA tokens, validates tracked sessions, throttles `last_seen_at` writes, and enforces the admin guard.
 - [backend/app/routers/auth.py](/D:/New%20folder/rs/backend/app/routers/auth.py): handles registration, login, 2FA setup and verification, session listing and revocation, logout, password change, forgot-password, and reset-password. Recovery behavior includes returning a clear `503` when password-reset email delivery is not configured, revoking sessions when passwords change, and queuing login alert emails when Resend is configured.
 - [backend/app/routers/files.py](/D:/New%20folder/rs/backend/app/routers/files.py): handles directory listing, search, streamed upload, resumable chunk upload, preview, thumbnail serving, version history, rename, move, star, trash, restore, permanent delete, and copy. Recovery behavior includes removing partially written files on failed uploads, rejecting incomplete chunk assemblies, re-checking quota at upload completion, and retrying version-number conflicts up to five times before returning `409`.
 - [backend/app/routers/folders.py](/D:/New%20folder/rs/backend/app/routers/folders.py): creates folders, enforces same-location uniqueness, and recursively trashes folder contents.
 - [backend/app/routers/storage.py](/D:/New%20folder/rs/backend/app/routers/storage.py): reports per-user usage, version-aware storage breakdown, activity history, and empties the current user's trash.
 - [backend/app/routers/sharing.py](/D:/New%20folder/rs/backend/app/routers/sharing.py): creates, lists, validates, and revokes share links. Recovery behavior includes expiry checks, download-limit checks, atomic download-slot reservation, password validation, and safe refusal when the file is missing or the link was revoked.
+- [backend/app/routers/shared_folders.py](/D:/New%20folder/rs/backend/app/routers/shared_folders.py): lists shared folder roots and manages authenticated folder access grants by username or email. Role behavior is `viewer`, `editor`, and `admin`, with admin access required to manage grants.
+- [backend/app/shared_access.py](/D:/New%20folder/rs/backend/app/shared_access.py): resolves owner versus shared-folder access contexts, verifies role thresholds, maps shared-root relative paths, and keeps shared-folder file operations scoped to the owner's tree.
 - [backend/app/routers/admin.py](/D:/New%20folder/rs/backend/app/routers/admin.py): manages users, quotas, admin status, forced password resets, user deletion, and system stats. Guard behavior is enforced centrally via `get_admin_user`.
 - [backend/app/search_index.py](/D:/New%20folder/rs/backend/app/search_index.py): extracts bounded text content for indexing and produces short match snippets for search results.
 - [backend/app/thumbnails.py](/D:/New%20folder/rs/backend/app/thumbnails.py): generates JPEG thumbnails for supported image formats and intentionally returns `None` instead of failing the upload when thumbnail generation breaks.
@@ -186,8 +201,10 @@ erDiagram
     USER ||--o{ USER_SESSION : has
     USER ||--o{ ACTIVITY_LOG : creates
     USER ||--o{ SHARE_LINK : owns
+    USER ||--o{ SHARED_FOLDER_ACCESS : receives
     FILE ||--o{ FILE_VERSION : has
     FILE ||--o{ SHARE_LINK : shared_as
+    FILE ||--o{ SHARED_FOLDER_ACCESS : grants_root
 
     USER {
         string id
@@ -255,6 +272,15 @@ erDiagram
         string file_name
         datetime timestamp
     }
+
+    SHARED_FOLDER_ACCESS {
+        string id
+        string folder_id
+        string owner_id
+        string user_id
+        string role
+        string invited_by
+    }
 ```
 
 Concurrency and transaction notes:
@@ -264,6 +290,7 @@ Concurrency and transaction notes:
 - File version creation uses a unique constraint on `(file_id, version)` plus `db.begin_nested()` retry loops in [backend/app/routers/files.py](/D:/New%20folder/rs/backend/app/routers/files.py) to mitigate concurrent version uploads/restores.
 - Concurrent upload/delete operations are not globally serialized. Ownership checks prevent cross-user interference, but same-user concurrent operations can still race at the business-logic level.
 - Upload sessions are namespaced by `user_id` and `upload_id`, which reduces collision risk for resumable uploads.
+- Shared-folder access rows are unique by `(folder_id, user_id)` so re-inviting a user updates the role instead of creating duplicate grants.
 - There is no optimistic-lock version column on the main `files` row for rename/move/star updates. In practice this means "last successful write wins" for overlapping metadata updates.
 - Trash and permanent delete authorization is ownership-based. Destructive queries always scope by `FileModel.id == file_id` and `FileModel.owner_id == current_user.id`, so one user cannot delete another user's rows through normal endpoints.
 
@@ -362,6 +389,15 @@ flowchart TD
 5. Download-slot consumption is updated atomically with an `UPDATE ... WHERE download_count < max_downloads` pattern in [backend/app/routers/sharing.py](/D:/New%20folder/rs/backend/app/routers/sharing.py).
 6. Trashing a file deactivates its active share links, and later public access returns `410 Gone` instead of serving stale links.
 
+### Shared folders
+
+1. A folder owner or shared-folder admin opens [src/components/SharedFolderModal.jsx](/D:/New%20folder/rs/src/components/SharedFolderModal.jsx).
+2. The frontend calls `/api/shared-folders/{folder_id}/access` to list, invite, update, or remove access entries.
+3. Invite targets resolve to existing users by username or email.
+4. `viewer` grants read access, `editor` grants write access inside the shared folder tree, and `admin` additionally grants access-management rights on the shared root.
+5. File and folder routes use [backend/app/shared_access.py](/D:/New%20folder/rs/backend/app/shared_access.py) to translate shared-root relative paths back to the owner's stored path.
+6. Public share-link creation remains owner-only even for users who can edit or administer a shared folder.
+
 ### Password reset and alerts
 
 1. `POST /api/auth/forgot-password` validates that Resend is configured.
@@ -406,9 +442,11 @@ Admin guard:
 - Admin-only routes depend on `get_admin_user()` in [backend/app/auth.py](/D:/New%20folder/rs/backend/app/auth.py).
 - That helper first resolves the authenticated user, then rejects non-admins with `403`.
 
-Authorization for destructive operations:
+Authorization for file operations:
 
-- File trash, restore, permanent delete, version access, version delete, and folder deletion all scope queries by both resource id and `owner_id == current_user.id`.
+- File and folder routes resolve an access context first: direct owners receive `owner`, while collaborators receive the highest matching shared-folder role for the resource.
+- Shared-folder operations use role thresholds: `viewer` for reads, `editor` for writes and new versions, and `admin` for access management, restores, version deletion, trash, and permanent deletion.
+- Owner-only operations still include starred-state changes, local copy creation from the regular file view, and public share-link creation.
 - Admin actions use the separate admin dependency and do not reuse regular-user ownership checks.
 - Share-link revocation is also owner-scoped by `ShareLink.owner_id == current_user.id`.
 - Path traversal checks on previews, thumbnails, and share downloads ensure the resolved on-disk path still lives under `settings.storage_path`.
@@ -430,6 +468,7 @@ Current failure handling:
 - Search extraction failure returns `None`.
 - Upload still succeeds even if search extraction fails.
 - Startup backfill later writes `""` as a sentinel if the row was still `NULL`.
+- Shared-folder invite failure returns `404` when the username/email does not resolve to an existing user and `400` when the invite target is already the owner.
 - Chunk assembly failure deletes the final output file if assembly or size verification fails.
 - Temp-dir cleanup failure logs a warning and leaves the temp directory behind; the upload can still complete.
 - Missing files on disk cause preview, download, version download, and share download to return `404`.
@@ -500,6 +539,7 @@ Conflict handling:
 - On startup, the backend creates missing directories and initializes the schema.
 - `run_migrations()` adds supported columns and indexes for older SQLite databases.
 - `cleanup_old_trash()` permanently deletes files older than `TRASH_AUTO_DELETE_DAYS` and updates per-user storage totals.
+- `cleanup_activity_logs()` removes activity logs older than 300 days and runs daily while the app process is alive.
 - `backfill_search_index()` runs in the background after startup and indexes files whose `content_index` is `NULL`.
 - On Linux, backfill uses a non-blocking `fcntl` lock so only one worker runs it at a time.
 - On Windows, `fcntl` is unavailable, so backfill still runs but without that multi-worker lock.
@@ -537,6 +577,7 @@ Operations should track:
 - rate-limit hits from SlowAPI
 - storage free space on both the file volume and the SQLite data volume
 - count and size of `storage/tmp` upload-session directories
+- activity-log cleanup volume and unexpectedly missing audit history near the 300-day retention boundary
 - total thumbnail generation failures
 - total password-reset and login-alert email failures
 - search-backfill duration and files processed per startup
@@ -552,6 +593,7 @@ Operations should track:
 - There is no background job queue for thumbnails, email retries, or long-running reprocessing.
 - There is no object storage abstraction in active use; file content is tied to local filesystem volumes.
 - There is no explicit optimistic locking for overlapping metadata updates on the same `files` row.
+- Shared-folder grants are role-based but do not currently provide per-file exceptions, invite notifications, or an external-user invitation workflow.
 
 ## 14. Deployment Notes
 
@@ -585,4 +627,5 @@ Critical relationships:
 - backend stores binary files, thumbnails, and upload chunks on disk
 - backend sends transactional email through Resend
 - share links allow public access without normal JWT auth
+- shared-folder grants allow authenticated cross-user collaboration inside a folder tree
 - startup jobs mutate both DB state and filesystem state
