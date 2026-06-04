@@ -124,6 +124,7 @@ Useful events:
 - User role and quota changes.
 - Password resets and forced password changes.
 - Share link creation, access, revocation, and expiry.
+- Shared-folder invites, role changes, removals, and writes by collaborators.
 - Session revocation.
 - Permanent delete operations.
 
@@ -163,6 +164,16 @@ Persist selected upload state in the browser so interrupted uploads can resume m
 
 Expose per-link access history, download counts, and last-access details in the share management UI.
 
-### 14. Mobile file actions polish
+### 14. Collaboration notifications
+
+Add notifications for shared-folder invites, access changes, and important collaborator actions.
+
+Expected impact:
+
+- Makes collaboration visible without requiring users to poll the shared-folder list.
+- Helps owners notice role changes and unexpected shared-folder activity.
+- Complements the existing login alert email path with collaboration-focused account email.
+
+### 15. Mobile file actions polish
 
 Review touch-first interactions for context menus, drag-and-drop, preview controls, and upload progress.
