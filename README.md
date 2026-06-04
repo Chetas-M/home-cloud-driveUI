@@ -33,7 +33,8 @@ Home Cloud Drive lets you upload, organize, preview, share, and manage files wit
 - Rename/move/copy/trash/restore/permanent delete flows
 - Favorites (starred files)
 - Image thumbnails generated server-side
-- Secure sharing links (password, expiry, download limits)
+- Secure public file sharing links (password, expiry, download limits)
+- Collaborative shared folders with viewer, editor, and admin roles
 - Storage usage reporting + activity logs
 - Version-aware storage accounting in the dashboard
 - Admin panel for user and quota management
@@ -50,7 +51,7 @@ flowchart LR
     CF[Cloudflare Tunnel<br/>optional]
     N[Nginx Frontend Container<br/>serves Vite build + proxies /api]
     FE[React SPA<br/>src/App.jsx + components]
-    API[FastAPI Backend<br/>routers auth/files/folders/storage/admin/share]
+    API[FastAPI Backend<br/>routers auth/files/folders/storage/admin/share/shared-folders]
     AUTH[Auth + Session Layer<br/>JWT, 2FA, password reset]
     DB[(SQLite<br/>users, files, versions, shares, sessions, activity)]
     FS[(Local Storage Volume<br/>user files, versions, thumbnails, temp chunks)]
@@ -222,11 +223,14 @@ See `backend/.env.example` for backend-specific defaults.
 - If email delivery is not configured, the API returns a clear setup error instead of silently failing.
 - The same Resend configuration also enables new-login alert emails for tracked sessions.
 
-### Sharing and upload notes
+### Sharing and collaboration notes
 
-- Share links are file-only; folders cannot be shared directly.
-- Trashing a file automatically deactivates any active share links that point to it.
-- Password-protected share downloads use the `X-Share-Password` header instead of query parameters.
+- Public share links are file-only; folders cannot be exposed through anonymous share links.
+- Folder collaboration is handled separately through `/api/shared-folders` and requires authenticated users.
+- Shared-folder roles are `viewer`, `editor`, and `admin`. Editors can write inside the shared tree; admins can manage access on the shared root.
+- Shared-folder invite targets can be usernames or email addresses for existing users.
+- Trashing a file or folder automatically deactivates any active public share links that point to affected files.
+- Password-protected public share downloads use the `X-Share-Password` header instead of query parameters.
 - Resumable uploads are stored under `storage/tmp/<user_id>/<upload_id>` until completion.
 - Abandoned resumable upload temp directories are not automatically garbage-collected yet, so operators should monitor `storage/tmp` on long-running deployments.
 
@@ -239,7 +243,8 @@ Main groups under `/api`:
 - `/api/folders` - folder operations
 - `/api/storage` - storage stats, activity, trash cleanup
 - `/api/admin` - admin-only user/system endpoints
-- `/api/share` - share link create/access/revoke
+- `/api/share` - public file share link create/access/revoke
+- `/api/shared-folders` - authenticated shared-folder access management
 
 Notable auth routes include login, register, forgot/reset password, 2FA setup and verification, and active session management.
 Notable file routes also include version history endpoints for listing, uploading, restoring, downloading, and deleting historical versions of a file.
@@ -257,6 +262,7 @@ Notable file routes also include version history endpoints for listing, uploadin
 - The backend runs lightweight SQLite migrations on startup for supported schema additions such as file version metadata.
 - Search indexing for older files is backfilled in the background after startup.
 - Trashed files older than `TRASH_AUTO_DELETE_DAYS` are permanently deleted during backend startup.
+- Activity logs older than 300 days are cleaned up by a daily background task.
 - The FastAPI OpenAPI/docs endpoints are disabled in the shipped backend app configuration.
 - The health endpoint at `/health` is intentionally loopback-only and is mainly used by the Docker health check.
 
@@ -292,6 +298,6 @@ docker-compose down
 
 ## Upgrade opportunities
 
-The project is ready for several meaningful next-step improvements, including object storage support, automated cleanup for abandoned resumable uploads, richer search indexing, async background workers, database scalability options, stronger observability, and automated backups.
+The project is ready for several meaningful next-step improvements, including object storage support, automated cleanup for abandoned resumable uploads, richer search indexing, async background workers, database scalability options, stronger observability, automated backups, and richer collaboration/audit workflows.
 
 See [`docs/upgrade-opportunities.md`](docs/upgrade-opportunities.md) for a prioritized list with expected impact and implementation notes.
