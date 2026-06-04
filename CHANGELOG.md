@@ -1,5 +1,15 @@
 # Home Cloud Drive Development Report
 
+## Latest Updates (Jun 4, 2026)
+
+### Documentation refresh
+- Updated the root README to distinguish public file share links from authenticated shared-folder collaboration.
+- Expanded the backend README with `/api/shared-folders` endpoints, role behavior, and activity-log retention notes.
+- Refreshed the architecture guide with the shared-folder access-control layer, shared-folder data model, collaboration flow, and daily 300-day activity-log cleanup.
+- Added collaboration-focused future work to the upgrade opportunities guide.
+
+---
+
 ## Latest Updates (May 9, 2026)
 
 ### Documentation refresh
