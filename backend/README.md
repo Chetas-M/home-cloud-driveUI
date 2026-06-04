@@ -10,9 +10,10 @@ FastAPI backend for Home Cloud Drive, providing authentication, file storage API
 - File upload, download, preview, thumbnail, copy, move, rename, trash, and restore APIs
 - File version history with upload, restore, download, and delete operations
 - Folder management and server-backed file search
+- Authenticated shared-folder collaboration with viewer, editor, and admin roles
 - Storage quotas, version-aware usage accounting, activity logs, and admin management endpoints
 - Docker-ready deployment with SQLite and local disk storage
-- Startup migrations, search-index backfill, and automatic trash cleanup
+- Startup migrations, search-index backfill, automatic trash cleanup, and activity-log retention cleanup
 
 ## Quick Start
 
@@ -84,7 +85,8 @@ docker-compose up -d --build
 | Files | `/api/files`, upload, resumable upload, preview, thumbnail, copy, trash, restore, download |
 | Folders | `/api/folders` |
 | Storage | `/api/storage`, `/api/storage/activity`, `/api/storage/trash` |
-| Sharing | `/api/share` |
+| Public sharing | `/api/share` |
+| Shared folders | `/api/shared-folders` |
 | Admin | `/api/admin` |
 
 ## Resumable upload endpoints
@@ -112,14 +114,30 @@ Abandoned temp directories are not automatically cleaned up yet, so operators sh
 
 Version history is available only for non-folder files. Existing rows created before the feature landed get a base version record automatically the first time version history is requested.
 
-## Sharing behavior
+## Public sharing behavior
 
-- Share links can be created only for non-trashed files; folder shares are rejected.
+- Public share links can be created only for non-trashed files; folders are rejected for anonymous link sharing.
 - Public access uses `POST /api/share/{token}` to validate the link and optional password before showing metadata.
 - Public downloads use `GET /api/share/{token}/download`.
 - Password-protected downloads pass the password in the `X-Share-Password` header.
 - Trashing a file deactivates active share links that target it, and later access returns `410 Gone`.
 - Download limits are enforced atomically so concurrent consumers cannot overrun the remaining quota.
+
+## Shared-folder collaboration
+
+Shared folders are authenticated collaboration grants, separate from anonymous public share links.
+
+| Method | Endpoint | Description |
+| --- | --- | --- |
+| GET | `/api/shared-folders` | List folder roots shared with the current user |
+| GET | `/api/shared-folders/{folder_id}/access` | List access entries for a shared folder root |
+| POST | `/api/shared-folders/{folder_id}/access` | Invite or update a user by username/email with a role |
+| PATCH | `/api/shared-folders/{folder_id}/access/{access_id}` | Change a user's shared-folder role |
+| DELETE | `/api/shared-folders/{folder_id}/access/{access_id}` | Remove shared-folder access |
+
+Roles are `viewer`, `editor`, and `admin`.
+Viewers can read shared content, editors can create and modify files inside the shared tree, and admins can manage access on the shared root.
+Owners always retain full access, and public share links can only be created by the file owner.
 
 ## Configuration
 
@@ -166,6 +184,7 @@ If `PASSWORD_RESET_URL` is blank, the backend tries to build a reset link from a
 - Uploading or restoring a version creates a new latest version instead of mutating the old one.
 - The storage API adds a `versions` breakdown bucket for archived versions so quota usage reflects historical copies.
 - Startup runs lightweight schema migrations, background search-index backfill, and trash cleanup for items older than `TRASH_AUTO_DELETE_DAYS`.
+- Activity logs older than 300 days are removed by a daily in-process cleanup task.
 - On Linux, the search-index backfill uses a non-blocking file lock so only one worker performs the startup backfill at a time. On Windows, the backfill still runs but without that multi-worker file lock.
 
 ## Project structure
@@ -177,6 +196,7 @@ backend/
 |   |-- config.py              # Settings and environment loading
 |   |-- database.py            # Async database engine/session setup
 |   |-- email_service.py       # Resend email delivery helpers
+|   |-- shared_access.py       # Shared-folder access resolution
 |   |-- models.py              # SQLAlchemy models
 |   |-- schemas.py             # Pydantic request/response schemas
 |   |-- auth.py                # Auth, JWT, password reset, and 2FA helpers
